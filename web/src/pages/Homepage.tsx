@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Button } from "../components/Button";
 import type { DemoProblem } from "../types";
+import { Link } from "react-router-dom";
 
 /**
  * Setup check / Homepage
@@ -41,6 +42,9 @@ export function Homepage() {
 
   return (
     <section className="card">
+      {
+        import.meta.env.DEV && (<Link to="/dev-only-feedback-styleguide" className="card__link">Styleguide</Link>)
+      }
       <h2 className="card__title">Setup check</h2>
       {error && (
         <>
