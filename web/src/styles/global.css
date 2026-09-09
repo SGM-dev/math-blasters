@@ -215,8 +215,6 @@ a.btn {
   background: var(--accent-soft);
 }
 
-
-
 /* The press: button drops onto its own shadow. */
 .btn--primary:active:not(:disabled) {
   transform: translateY(4px);
@@ -246,30 +244,8 @@ a.btn {
   font-size: 1.125rem;
 }
 
-.btn__label--dimmed{
+.btn__label--dimmed {
   opacity: 0.35;
-}
-.btn__spinner {
-  display: inline-block;
-  width: 1em;
-  height: 1em;
-  box-sizing: border-box;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: var(--radius-pill);
-  animation: btn-spin var(--duration-base) linear infinite;
-  margin-right: var(--space-2);
-  vertical-align: middle;
-}
-@media (prefers-reduced-motion: reduce) {
-  .btn__spinner {
-    animation: none;
-  }
-}
-@keyframes btn-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* -------------------------------------------------------- answer field --- */
@@ -332,5 +308,148 @@ a.btn {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  } 
+  }
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: spinner-spin var(--duration-base) linear infinite;
+  vertical-align: middle;
+}
+.spinner--sm {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-width: 1.5px;
+}
+.spinner--md {
+  width: 1rem;
+  height: 1rem;
+  border-width: 2px;
+}
+.spinner--lg {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-width: 2.5px;
+}
+@keyframes spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-style: dotted;
+  }
+}
+
+/* Screen-reader utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Skeleton Container & Elements */
+.skeleton-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--surface-sunken) 25%,
+    var(--border) 50%,
+    var(--surface-sunken) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton--text {
+  height: 1.25rem;
+  width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton--rectangular {
+  width: 100%;
+  height: 8rem;
+  border-radius: var(--radius-md);
+}
+
+.skeleton--circular {
+  width: 3rem;
+  height: 3rem;
+  border-radius: var(--radius-pill);
+}
+
+.skeleton--card {
+  width: 100%;
+  min-height: 14rem;
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--border);
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background: var(--surface-sunken);
+  }
+}
+
+/* --- error state --- */
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--danger-soft);
+  border: 2px solid var(--danger);
+  border-radius: var(--radius-md);
+  text-align: center;
+  width: 100%;
+}
+
+.error-state__message {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.error-state__details {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.error-state__actions {
+  margin-top: var(--space-2);
 }

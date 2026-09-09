@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
-
-import { api } from "../api/client";
-import { Button } from "../components/Button";
+import { useEffect, useRef, useState } from "react";
 import type { DemoProblem } from "../types";
 import { Link } from "react-router-dom";
+import { api, type ApiError } from "../api/client";
+
+import { Button } from "../components/Button";
+import { Skeleton } from "../components/Skeleton";
+import { ErrorState } from "../components/ErrorState";
 
 /**
  * Setup check / Homepage
@@ -11,20 +13,35 @@ import { Link } from "react-router-dom";
 
 export function Homepage() {
   const [problem, setProblem] = useState<DemoProblem | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | Error | string | null>(null);
   const [value, setValue] = useState("");
   const [result, setResult] = useState<boolean | null>(null);
   const [checking, setChecking] = useState(false);
+  const isMounted = useRef(true);
 
-  useEffect(() => {
-    let cancelled = false;
+  function loadProblem() {
+    setError(null);
+    setProblem(null);
     api
       .getDemoProblem()
-      .then((found) => !cancelled && setProblem(found))
-      .catch((err) => !cancelled && setError(err.message));
+      .then((found) => {
+        if (isMounted.current) {
+          setProblem(found);
+        }
+      })
+      .catch((err) => {
+        if (isMounted.current) {
+          setError(err);
+        }
+      });
+  }
+
+  useEffect(() => {
+    isMounted.current = true;
+    loadProblem();
 
     return () => {
-      cancelled = true;
+      isMounted.current = false;
     };
   }, []);
 
@@ -32,31 +49,51 @@ export function Homepage() {
     setChecking(true);
     try {
       const response = await api.checkDemoAnswer(Number(value));
-      setResult(response.correct);
-    } catch {
-      setError("Couldn't check that answer.");
+      if (isMounted.current) {
+        setResult(response.correct);
+      }
+    } catch (err) {
+      if (isMounted.current) {
+        setError(err instanceof Error ? err : "Couldn't check that answer.");
+      }
     } finally {
-      setChecking(false);
+      if (isMounted.current) {
+        setChecking(false);
+      }
     }
   }
 
   return (
     <section className="card">
-      {
-        import.meta.env.DEV && (<Link to="/dev-only-feedback-styleguide" className="card__link">Styleguide</Link>)
-      }
+      {import.meta.env.DEV && (
+        <Link to="/dev-only-feedback-styleguide" className="card__link">
+          Styleguide
+        </Link>
+      )}
       <h2 className="card__title">Setup check</h2>
       {error && (
-        <>
-          <p className="error">{error}</p>
+        <ErrorState message={error} retry={loadProblem}>
           <p className="muted">
             Start the stack <code>docker compose up</code>, then seed it with{" "}
             <code>docker compose exec api python -m app.seed</code>
           </p>
-        </>
+        </ErrorState>
       )}
 
-      {!error && !problem && <p className="muted">Loading...</p>}
+      {!error && !problem && (
+        <div
+          style={{
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-4)",
+            alignItems: "center",
+          }}>
+          <Skeleton variant="text" width="60%" height="1.5rem" />
+          <Skeleton variant="rectangular" width="12rem" height="3.5rem" />
+          <Skeleton variant="rectangular" width="8rem" height="3rem" />
+        </div>
+      )}
 
       {problem && (
         <>
@@ -81,8 +118,7 @@ export function Homepage() {
             variant="primary"
             isLoading={checking}
             disabled={value.trim() === "" || checking}
-            onClick={check}
-          >
+            onClick={check}>
             Check answer
           </Button>
 
