@@ -5,8 +5,8 @@ piece of work merged - not that the app gets finished fastest.
 
 ## Before you start
 
-Get it running first, following the [Quickstart](./README.md#quickstart). If
-you can answer the setup-check question in the browser, your environment is
+Get it running first by running `./scripts/dev-setup.sh` from the repository
+root. If you can answer the setup-check question in the browser, your environment is
 good. If something in the setup doesn't work, that's a bug worth an issue on
 its own.
 
