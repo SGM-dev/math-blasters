@@ -24,7 +24,6 @@ os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DB
 from app.db import get_session  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.models import Base  # noqa: E402
-from app.seed import seed  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -70,9 +69,3 @@ def client(session: Session) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def seeded(session: Session) -> Session:
-    seed(session)
-    return session
