@@ -6,7 +6,7 @@ piece of work merged - not that the app gets finished fastest.
 ## Before you start
 
 Get it running first by running `./scripts/dev-setup.sh` from the repository
-root. If you can answer the setup-check question in the browser, your environment is
+root. Once services are healthy and http://localhost:5173 loads, your environment is
 good. If something in the setup doesn't work, that's a bug worth an issue on
 its own.
 
@@ -75,27 +75,14 @@ in the README.
 
 - **Tests.** New behaviour needs a test. Bug fixes need a test that fails
   before the fix.
-- **Answers stay on the server.** Never serialise a correct answer to the
-  browser. `DemoProblemOut` omits it and grading happens in the API; keep that
-  property as the content model grows.
+- **Content lives in the repo.** The API stores no content and grades nothing.
+  Never serialise expected values or answers in API responses.
 - **Use the design tokens.** Colours, spacing, radii and easing all live in
   `web/src/styles/tokens.css`. Please don't hard-code hex values in components.
 - **Accessibility.** Interactive things must be reachable by keyboard and have
   a sensible accessible name. Animations must respect `prefers-reduced-motion`.
 - **It should feel like a game.** "Technically correct but joyless" is a valid
   review comment on this project.
-
-## A note on the placeholder
-
-`DemoProblem` (API) and `App.tsx` (frontend) exist only to prove the stack is
-wired up. They are **not** the beginning of the product, and they're small on
-purpose.
-
-The content model - what a topic, tutorial, lab, step and success criterion
-actually are - is still to be designed, in issues #19, #20 and #21. If your
-change involves growing `DemoProblem` into something content-shaped, stop and
-pick up those issues instead: it's a design decision the team should agree on
-the issue before anyone writes the schema.
 
 ## Questions
 

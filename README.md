@@ -5,9 +5,8 @@ Math Blasters will teach basic-math topics through short two-minute
 browser rather than read about arithmetic.
 
 **None of that is built yet.** This repo is the base template for the
-freeCodeCamp Summer 2026 Cohort sprint: the stack is wired up, CI runs, and a
-single hardcoded question proves the pieces talk to each other. Everything that
-makes it a product is an open issue waiting for you.
+freeCodeCamp Summer 2026 Cohort sprint: the stack is wired up and CI runs.
+Everything that makes it a product is an open issue waiting for you.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the issue-claiming workflow.
 
@@ -15,14 +14,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the issue-claiming workflow.
 
 | | |
 | --- | --- |
-| ✅ Built | React + TypeScript + Vite wiring, FastAPI + SQLAlchemy + Alembic wiring, Postgres, Docker Compose, CI on both suites, design tokens, one end-to-end setup check |
+| ✅ Built | React + TypeScript + Vite wiring, FastAPI + SQLAlchemy + Alembic wiring, Postgres, Docker Compose, CI on both suites, design tokens |
 | ❌ Not built | Topics, lessons, tutorials, labs, steps, content authoring, progress, accounts, hints, streaks, feedback design — **all of it** |
-
-The one page you get is a *setup check*: it fetches a hardcoded `3 + 4` from
-the API, you answer it, and the server grades it. That's it. Its only job is to
-tell a new contributor that their environment works.
-
-![The setup check page](./docs/screenshots/setup-check.png)
 
 ## Stack
 
@@ -47,9 +40,8 @@ That starts three services:
 - `api` — FastAPI on [http://localhost:8000](http://localhost:8000)
 - `web` — Vite dev server on [http://localhost:5173](http://localhost:5173)
 
-Then open [http://localhost:5173](http://localhost:5173). If you see the
-question and can answer it, your setup is good. Interactive API docs are at
-[http://localhost:8000/docs](http://localhost:8000/docs).
+Then open [http://localhost:5173](http://localhost:5173) to view the app.
+Interactive API docs are at [http://localhost:8000/docs](http://localhost:8000/docs).
 
 > **Why port 5433?** Plenty of machines already run PostgreSQL on 5432, and the
 > container can't bind a port that's taken. Compose publishes the database on
@@ -87,12 +79,10 @@ volume. If your volume predates that script and tests report that
 ### Tables are gone but Alembic is stamped at head
 
 If the app returns an internal server error because its tables were removed
-while Alembic still reports the database at `head`, rebuild the schema and
-reseed it:
+while Alembic still reports the database at `head`, rebuild the schema:
 
 ```bash
 docker compose exec api sh -c "alembic stamp base && alembic upgrade head"
-docker compose exec api python -m app.seed
 ```
 
 ### Running without Docker
@@ -116,7 +106,6 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 export DATABASE_URL="postgresql+psycopg://<user>:<password>@localhost:5432/mathblasters"
 alembic upgrade head
-python -m app.seed
 uvicorn app.main:app --reload
 
 # Frontend — second terminal
@@ -138,10 +127,9 @@ math-blasters/
 │   │   ├── main.py         app factory (shared by uvicorn and the tests)
 │   │   ├── config.py       env-driven settings
 │   │   ├── db.py           engine, session, SessionDep
-│   │   ├── models.py       DemoProblem — PLACEHOLDER, delete it
-│   │   ├── schemas.py      Pydantic models for the demo endpoint
-│   │   ├── seed.py         inserts the one demo row
-│   │   └── routers/        health.py, demo.py
+│   │   ├── models.py       DeclarativeBase for SQLAlchemy models
+│   │   ├── schemas.py      Pydantic schemas and error envelope models
+│   │   └── routers/        health.py
 │   ├── alembic/            migrations
 │   └── tests/              pytest suite
 ├── web/
@@ -156,29 +144,18 @@ math-blasters/
 └── .github/workflows/ci.yml
 ```
 
-### About the placeholder
+### Content and Invariants
 
-`DemoProblem` is one table with `prompt`, `expression` and `answer` columns. It
-knows nothing about topics, lessons, tutorials, labs, steps or success
-criteria, and **it is not the beginning of a content model**.
-
-Designing the real schema is issues #19, #20 and #21. Please start from the
-ticket and delete `DemoProblem`, rather than growing it into something it was
-never shaped to be.
-
-The one convention worth keeping: `DemoProblemOut` has no `answer` field, and
-grading happens in `POST /api/demo/check` on the server. The answer key should
-never reach the browser. There's a test asserting that.
+Content lives directly in the repository (see `web/src/content`) and is evaluated
+client-side. Content never enters the database, and the API stores no content and
+grades nothing. An automated invariant test enforces that no API response or OpenAPI
+schema exposes answers or expected values.
 
 ### API
 
-| Method | Route                 | Description                        |
-| ------ | --------------------- | ---------------------------------- |
-| GET    | `/api/health`         | Liveness check                     |
-| GET    | `/api/demo/problem`   | The demo question (no answer)      |
-| POST   | `/api/demo/check`     | Grade an answer server-side        |
-
-Three endpoints, all placeholders. The real API doesn't exist yet.
+| Method | Route         | Description    |
+| ------ | ------------- | -------------- |
+| GET    | `/api/health` | Liveness check |
 
 ### API Error Envelope Format
 
@@ -197,8 +174,7 @@ All API errors return a standardized JSON envelope structure with appropriate HT
 ### Styling
 
 `web/src/styles/tokens.css` holds the palette, spacing scale, radii, shadows
-and easing, with light and dark values. `global.css` styles the setup-check
-page and little else.
+and easing, with light and dark values. `global.css` provides base styling.
 
 This is a starting point, not a design system — it exists so contributors have
 consistent values to build with instead of inventing hex codes. Pull from the
