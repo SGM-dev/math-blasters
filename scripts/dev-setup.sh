@@ -47,13 +47,7 @@ do
     sleep 1
 done
 
-# Seeding demo data
-echo "API is healthy. Seeding the demo data..."
-if ! docker compose exec -T api python -m app.seed; then
-    echo "Failed to seed the demo data." >&2
-    exit 1
-fi
-
+echo "API is healthy."
 echo "Setup complete."
 echo "App: $APP_URL"
 echo "API docs: $API_DOCS_URL"
