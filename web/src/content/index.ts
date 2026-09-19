@@ -1,13 +1,9 @@
 import { arithmeticAdditionModule } from "./fixtures";
 import type {
-  Criterion,
-  CriterionResult,
   Lesson,
   Module,
   PageLesson,
   PageModule,
-  Step,
-  StepResult,
 } from "./types";
 
 // Re-export all types & fixtures
