@@ -1,3 +1,6 @@
+import type { Criterion, CriterionResult, Step, StepResult } from "./types";
+import { checkEquivalent } from "./equivalent";
+
 /**
  * Normalise raw submission before comparison:
  * - handles numbers and strings
@@ -22,4 +25,149 @@ export function normalizeSubmission(raw: unknown): string {
   );
 
   return thousandsNormalized;
+}
+
+function evaluateEquals(
+  expected: number | string,
+  normalizedSubmission: string,
+): boolean {
+  if (typeof expected === "number") {
+    const num = Number(normalizedSubmission);
+    return !Number.isNaN(num) && num === expected;
+  }
+  return normalizedSubmission === expected;
+}
+
+function evaluateApprox(
+  expected: { value: number; epsilon: number },
+  normalizedSubmission: string,
+): boolean {
+  const num = Number(normalizedSubmission);
+  if (Number.isNaN(num)) return false;
+  // Account for binary floating point rounding (e.g. 3.14 - 3.13 = 0.010000000000000231)
+  const diff = Math.abs(num - expected.value);
+  return diff <= expected.epsilon + 1e-9;
+}
+
+function evaluateInRange(
+  expected: { min: number; max: number },
+  normalizedSubmission: string,
+): boolean {
+  const num = Number(normalizedSubmission);
+  return !Number.isNaN(num) && num >= expected.min && num <= expected.max;
+}
+
+function evaluateEqualsAny(
+  expected: (number | string)[],
+  normalizedSubmission: string,
+): boolean {
+  return expected.some((exp) => evaluateEquals(exp, normalizedSubmission));
+}
+
+function evaluateSetEquals(
+  expected: (number | string)[],
+  normalizedSubmission: string,
+): boolean {
+  const rawItems = normalizedSubmission.split(",");
+  const normalizedItems = rawItems
+    .map((item) => normalizeSubmission(item))
+    .filter((item) => item !== "");
+
+  if (normalizedItems.length === 0) return false;
+
+  for (const subItem of normalizedItems) {
+    const hasMatch = expected.some((exp) => evaluateEquals(exp, subItem));
+    if (!hasMatch) {
+      return false;
+    }
+  }
+
+  for (const exp of expected) {
+    const hasMatch = normalizedItems.some((subItem) =>
+      evaluateEquals(exp, subItem),
+    );
+    if (!hasMatch) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Check an individual criterion against a user submission.
+ * - Empty submission never passes.
+ * - Returns { passed: true } on pass.
+ * - Returns { passed: false, reason_code } on failure.
+ * - Never returns, logs, or throws the expected value.
+ */
+export function checkCriterion(
+  criterion: Criterion,
+  submission: unknown,
+): CriterionResult {
+  const norm = normalizeSubmission(submission);
+
+  if (norm === "") {
+    return {
+      passed: false,
+      reason_code: criterion.reason_code,
+    };
+  }
+
+  let passed = false;
+
+  switch (criterion.check) {
+    case "equals":
+      passed = evaluateEquals(criterion.expected, norm);
+      break;
+    case "approx":
+      passed = evaluateApprox(criterion.expected, norm);
+      break;
+    case "in_range":
+      passed = evaluateInRange(criterion.expected, norm);
+      break;
+    case "equals_any":
+      passed = evaluateEqualsAny(criterion.expected, norm);
+      break;
+    case "set_equals":
+      passed = evaluateSetEquals(criterion.expected, norm);
+      break;
+    case "equivalent":
+      return checkEquivalent(criterion, submission);
+  }
+
+  if (passed) {
+    return { passed: true };
+  }
+
+  return {
+    passed: false,
+    reason_code: criterion.reason_code,
+  };
+}
+
+/**
+ * Check a step against a user submission.
+ * - For explain steps, returns { passed: true, results: [] }.
+ * - For answer steps, evaluates all criteria and returns { passed, results, reason_code }.
+ */
+export function checkStep(step: Step, submission: unknown): StepResult {
+  if (step.type === "explain") {
+    return {
+      passed: true,
+      results: [],
+    };
+  }
+
+  const results = step.criteria.map((criterion) =>
+    checkCriterion(criterion, submission),
+  );
+  const passed = results.every((r) => r.passed);
+  const firstFailing = results.find((r) => !r.passed);
+
+  return {
+    passed,
+    results,
+    reason_code: firstFailing?.reason_code,
+  };
 }
