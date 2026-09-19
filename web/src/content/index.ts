@@ -83,11 +83,12 @@ function toPageModule(module: Module): PageModule {
 // ---------------------------------------------------------------------------
 
 export { checkStep, checkCriterion, normalizeSubmission } from "./check";
-export { checkEquivalent } from "./equivalent";
 
 // ---------------------------------------------------------------------------
 // Signature-only Stubs (throw "not implemented")
 // ---------------------------------------------------------------------------
+
+export { checkEquivalent } from "./equivalent";
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
 

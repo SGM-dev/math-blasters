@@ -138,6 +138,10 @@ export function checkCriterion(
       );
       break;
     case "equivalent":
+      // Dispatches to checkEquivalent in equivalent.ts.
+      // Note: checkEquivalent is an intentional stub that throws until symbolic
+      // equivalence lands. Callers (e.g. UI evaluation) must handle this error or use an
+      // error boundary if evaluating content containing "equivalent" criteria prior to that feature landing.
       return checkEquivalent(criterion, submission);
   }
 
