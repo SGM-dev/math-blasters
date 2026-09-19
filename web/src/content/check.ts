@@ -20,7 +20,7 @@ export function normalizeSubmission(raw: unknown): string {
 
   // Normalize thousands separators: "1,000" and "1 000" -> "1000"
   const thousandsNormalized = dashNormalized.replace(
-    /(?<=\d)[, ](?=\d{3}(?!\d))/g,
+    /(?<=\d)[, \u00A0\u202F](?=\d{3}(?!\d))/g,
     "",
   );
 
@@ -44,9 +44,11 @@ function evaluateApprox(
 ): boolean {
   const num = Number(normalizedSubmission);
   if (Number.isNaN(num)) return false;
-  // Account for binary floating point rounding (e.g. 3.14 - 3.13 = 0.010000000000000231)
+  // Account for IEEE 754 float representation noise without dwarfing small epsilons
   const diff = Math.abs(num - expected.value);
-  return diff <= expected.epsilon + 1e-9;
+  return (
+    diff <= expected.epsilon + Math.max(Number.EPSILON * 4, expected.epsilon * 1e-9)
+  );
 }
 
 function evaluateInRange(
@@ -66,9 +68,9 @@ function evaluateEqualsAny(
 
 function evaluateSetEquals(
   expected: (number | string)[],
-  normalizedSubmission: string,
+  rawSubmission: string,
 ): boolean {
-  const rawItems = normalizedSubmission.split(",");
+  const rawItems = rawSubmission.split(",");
   const normalizedItems = rawItems
     .map((item) => normalizeSubmission(item))
     .filter((item) => item !== "");
@@ -130,7 +132,10 @@ export function checkCriterion(
       passed = evaluateEqualsAny(criterion.expected, norm);
       break;
     case "set_equals":
-      passed = evaluateSetEquals(criterion.expected, norm);
+      passed = evaluateSetEquals(
+        criterion.expected,
+        typeof submission === "string" ? submission : String(submission),
+      );
       break;
     case "equivalent":
       return checkEquivalent(criterion, submission);

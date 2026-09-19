@@ -33,6 +33,7 @@ describe("normalizeSubmission", () => {
   it("normalizes numbers with comma or space thousands separators", () => {
     expect(normalizeSubmission("1,000")).toBe("1000");
     expect(normalizeSubmission("1 000")).toBe("1000");
+    expect(normalizeSubmission("1\u00A0000")).toBe("1000");
     expect(normalizeSubmission("-1 000")).toBe("-1000");
     expect(normalizeSubmission("1,000,000")).toBe("1000000");
     expect(normalizeSubmission("1 000 000")).toBe("1000000");
@@ -195,6 +196,21 @@ describe("checkCriterion", () => {
         reason_code: "wrong_pi",
       });
     });
+
+    it("respects tight authored epsilons without being overridden by tolerance", () => {
+      const tightCriterion: ApproxCriterion = {
+        check: "approx",
+        expected: { value: 1.0, epsilon: 1e-10 },
+        reason_code: "not_close_enough",
+      };
+      expect(checkCriterion(tightCriterion, "1.00000000005")).toEqual({
+        passed: true,
+      });
+      expect(checkCriterion(tightCriterion, "1.0000000002")).toEqual({
+        passed: false,
+        reason_code: "not_close_enough",
+      });
+    });
   });
 
   describe("in_range check", () => {
@@ -266,6 +282,20 @@ describe("checkCriterion", () => {
       expect(checkCriterion(numericSetCriterion, "3, 1, 2")).toEqual({ passed: true });
       expect(checkCriterion(numericSetCriterion, " 2 , 3 , 1 ")).toEqual({ passed: true });
       expect(checkCriterion(numericSetCriterion, "2, 1, 2, 3")).toEqual({ passed: true }); // duplicate in submission ignored in sets
+    });
+
+    it("handles 3-digit numbers without spaces without misinterpreting commas as thousands separators", () => {
+      const threeDigitSetCriterion: SetEqualsCriterion = {
+        check: "set_equals",
+        expected: [100, 200, 300],
+        reason_code: "wrong_set",
+      };
+      expect(checkCriterion(threeDigitSetCriterion, "100,200,300")).toEqual({
+        passed: true,
+      });
+      expect(checkCriterion(threeDigitSetCriterion, "300, 100, 200")).toEqual({
+        passed: true,
+      });
     });
 
     it("fails when missing, extra, or different elements", () => {
