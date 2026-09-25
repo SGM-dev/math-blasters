@@ -26,7 +26,7 @@ export function LessonView() {
   const backHref = moduleSlug ? `/modules/${encodeURIComponent(moduleSlug)}` : undefined;
 
   return (
-    <Card as="section" title={lesson.title}>
+    <Card as="section" title={lesson.title} titleVariant="heading">
       <LessonStepper lesson={lesson} backHref={backHref} />
     </Card>
   );
