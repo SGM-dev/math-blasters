@@ -4,6 +4,7 @@ import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -85,6 +86,16 @@ def test_register_rejects_duplicate_name():
 
 def test_fake_provider_profile_follows_name():
     assert FakeProvider(name="github").fetch_profile({}).provider == "github"
+    fake = FakeProvider()
+    fake.name = "google"
+    assert fake.fetch_profile({}).provider == "google"
+
+
+def test_fake_provider_encodes_authorize_params():
+    state = "a&redirect_uri=https://evil.example#x"
+    url = FakeProvider().authorize_url(state=state, code_challenge="c+/=")
+    query = parse_qs(urlsplit(url).query)
+    assert query == {"state": [state], "code_challenge": ["c+/="]}
 
 
 def test_get_unknown_provider_returns_none():
