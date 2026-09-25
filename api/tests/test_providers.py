@@ -1,25 +1,27 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
 from app.providers import (
     OAuthProvider,
     ProviderProfile,
-    clear_registry,
     get_provider,
     register,
 )
 from tests.fake_provider import FakeProvider
 
+API_DIR = Path(__file__).resolve().parent.parent
+
 
 @pytest.fixture(autouse=True)
-def clean_registry():
-    """Ensure provider registry is clean before and after each test."""
-    clear_registry()
-    yield
-    clear_registry()
+def clean_registry(monkeypatch):
+    """Give each test its own empty registry."""
+    monkeypatch.setattr("app.providers._registry", {})
 
 
 def test_fake_provider_satisfies_oauth_provider_protocol():
@@ -59,15 +61,30 @@ def test_provider_profile_is_frozen():
 
 
 def test_registry_starts_empty():
-    assert get_provider("fake") is None
-    assert get_provider("github") is None
-    assert get_provider("google") is None
+    # A fresh interpreter, since the autouse fixture would hide import-time registrations.
+    check = (
+        "import app.main; from app.providers import _registry; assert _registry == {}, _registry"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", check], cwd=API_DIR, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_register_and_get_provider():
     fake = FakeProvider()
     register(fake)
     assert get_provider("fake") is fake
+
+
+def test_register_rejects_duplicate_name():
+    register(FakeProvider())
+    with pytest.raises(ValueError, match="already registered"):
+        register(FakeProvider())
+
+
+def test_fake_provider_profile_follows_name():
+    assert FakeProvider(name="github").fetch_profile({}).provider == "github"
 
 
 def test_get_unknown_provider_returns_none():

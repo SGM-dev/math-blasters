@@ -39,10 +39,9 @@ _registry: dict[str, OAuthProvider] = {}
 
 
 def register(provider: OAuthProvider) -> None:
-    """Register an OAuthProvider instance.
-
-    Providers register themselves only when their credentials (client id/secret) are set.
-    """
+    """Register a provider; modules call this only when their client id and secret are set."""
+    if provider.name in _registry:
+        raise ValueError(f"OAuth provider {provider.name!r} is already registered")
     _registry[provider.name] = provider
 
 
@@ -51,15 +50,9 @@ def get_provider(name: str) -> OAuthProvider | None:
     return _registry.get(name)
 
 
-def clear_registry() -> None:
-    """Clear all registered providers (primarily for test teardown)."""
-    _registry.clear()
-
-
 __all__ = [
     "OAuthProvider",
     "ProviderProfile",
-    "clear_registry",
     "get_provider",
     "register",
 ]
