@@ -125,13 +125,50 @@ def get_default_redirect_target(settings: Settings) -> str:
     return allowlist[0] if allowlist else "/"
 
 
-CLEAR_COOKIE_HEADERS = {"Set-Cookie": 'oauth_flow=""; Path=/api/auth; Max-Age=0; SameSite=lax'}
+def _matches_path_prefix(target_path: str, allowed_path: str) -> bool:
+    allowed = allowed_path.rstrip("/")
+    return not allowed or target_path == allowed or target_path.startswith(f"{allowed}/")
 
 
-def _redirect_clearing_cookie(target: str, error: str | None = None) -> RedirectResponse:
-    url = f"{target}{'&' if '?' in target else '?'}error={quote(error)}" if error else target
+def clear_cookie_headers(settings: Settings) -> dict[str, str]:
+    """Build Set-Cookie header to clear oauth_flow with matching security attributes."""
+    dummy = Response()
+    dummy.delete_cookie(
+        key="oauth_flow",
+        path="/api/auth",
+        httponly=True,
+        samesite="lax",
+        secure=settings.cookie_secure,
+    )
+    cookie_hdr = dummy.headers.get("set-cookie")
+    return {"Set-Cookie": cookie_hdr} if cookie_hdr else {}
+
+
+def _redirect_clearing_cookie(
+    target: str,
+    settings: Settings,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> RedirectResponse:
+    params: list[str] = []
+    if error:
+        params.append(f"error={quote(error)}")
+    if error_description:
+        params.append(f"error_description={quote(error_description)}")
+
+    url = target
+    if params:
+        sep = "&" if "?" in target else "?"
+        url = f"{target}{sep}{'&'.join(params)}"
+
     response = RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-    response.delete_cookie(key="oauth_flow", path="/api/auth")
+    response.delete_cookie(
+        key="oauth_flow",
+        path="/api/auth",
+        httponly=True,
+        samesite="lax",
+        secure=settings.cookie_secure,
+    )
     return response
 
 
@@ -143,9 +180,7 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
 
     if not target.startswith(("//", "/\\", "\\")):
         if target.startswith("/"):
-            if "/" in allowlist or any(
-                target.startswith(p) for p in allowlist if p.startswith("/")
-            ):
+            if any(p.startswith("/") and _matches_path_prefix(target, p) for p in allowlist):
                 return target
         else:
             parsed = urlsplit(target)
@@ -155,8 +190,7 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
                     if allowed.startswith(("http://", "https://")):
                         allowed_parsed = urlsplit(allowed)
                         if target_origin == f"{allowed_parsed.scheme}://{allowed_parsed.netloc}":
-                            allowed_path = allowed_parsed.path.rstrip("/")
-                            if not allowed_path or parsed.path.startswith(allowed_path):
+                            if _matches_path_prefix(parsed.path, allowed_parsed.path):
                                 return target
 
     raise APIException(
@@ -233,7 +267,7 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing, invalid, or expired OAuth state cookie",
-            headers=CLEAR_COOKIE_HEADERS,
+            headers=clear_cookie_headers(settings),
         )
 
     if cookie_payload.get("provider") != provider:
@@ -244,7 +278,7 @@ def oauth_callback(
                 f"OAuth provider mismatch: expected '{cookie_payload.get('provider')}', "
                 f"got '{provider}'"
             ),
-            headers=CLEAR_COOKIE_HEADERS,
+            headers=clear_cookie_headers(settings),
         )
 
     expected_state = cookie_payload.get("state")
@@ -253,14 +287,19 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing or mismatched OAuth state parameter",
-            headers=CLEAR_COOKIE_HEADERS,
+            headers=clear_cookie_headers(settings),
         )
 
     target = cookie_payload.get("next") or get_default_redirect_target(settings)
 
     # Trapping provider-side cancellation or failure before code exchange
     if error:
-        return _redirect_clearing_cookie(target, error=error)
+        return _redirect_clearing_cookie(
+            target,
+            settings,
+            error=error,
+            error_description=error_description,
+        )
 
     verifier = cookie_payload.get("verifier")
     if not code or not verifier:
@@ -268,7 +307,7 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing authorization code or verifier",
-            headers=CLEAR_COOKIE_HEADERS,
+            headers=clear_cookie_headers(settings),
         )
 
     try:
@@ -276,16 +315,16 @@ def oauth_callback(
         profile = provider_instance.fetch_profile(tokens)
     except Exception:
         logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
-        return _redirect_clearing_cookie(target, error="provider_error")
+        return _redirect_clearing_cookie(target, settings, error="provider_error")
 
-    response = _redirect_clearing_cookie(target)
+    response = _redirect_clearing_cookie(target, settings)
 
     try:
         on_profile(profile)
     except Exception as exc:
         logger.exception("Error processing authenticated profile in on_profile hook")
         cookie_hdr = response.headers.get("set-cookie")
-        headers = {"Set-Cookie": cookie_hdr} if cookie_hdr else CLEAR_COOKIE_HEADERS
+        headers = {"Set-Cookie": cookie_hdr} if cookie_hdr else clear_cookie_headers(settings)
         raise APIException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="internal",

@@ -162,6 +162,14 @@ def test_start_respects_path_prefix_on_allowed_origin(client, monkeypatch):
     assert resp_fail.status_code == 400
     assert resp_fail.json()["error"]["code"] == "validation_error"
 
+    # Disallowed sibling path prefix (must not match without path boundary)
+    resp_sibling = client.get(
+        "/api/auth/fake/start?next=https://app.example.com/application",
+        follow_redirects=False,
+    )
+    assert resp_sibling.status_code == 400
+    assert resp_sibling.json()["error"]["code"] == "validation_error"
+
 
 def test_start_never_leaks_secrets(client, monkeypatch):
     fake = FakeProvider(name="fake")
@@ -326,12 +334,16 @@ def test_callback_provider_access_denied_redirects_and_clears_cookie(client):
     assert callback_resp.status_code == 307
     redirect_loc = callback_resp.headers["location"]
     assert "/dashboard" in redirect_loc
-    assert "error=" in redirect_loc
+    assert "error=access_denied" in redirect_loc
+    assert "error_description=" in redirect_loc
+    assert "User" in redirect_loc and "declined" in redirect_loc
 
-    # State cookie should be cleared
+    # State cookie should be cleared with proper security flags
     cookie_header = callback_resp.headers.get("set-cookie")
     assert cookie_header is not None
     assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+    assert "httponly" in cookie_header.lower()
+    assert "samesite=lax" in cookie_header.lower()
 
     # Code exchange must NOT be attempted when access was denied
     assert fake.exchange_called is False
