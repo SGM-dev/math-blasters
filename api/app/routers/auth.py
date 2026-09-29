@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import time
 from typing import Annotated, Any
@@ -158,6 +159,9 @@ def clear_cookie_headers(settings: Settings) -> dict[str, str]:
     return {"Set-Cookie": cookie_hdr} if cookie_hdr else {}
 
 
+_SAFE_ERROR_CODE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
 def _redirect_clearing_cookie(
     target: str,
     settings: Settings,
@@ -166,9 +170,11 @@ def _redirect_clearing_cookie(
 ) -> RedirectResponse:
     params: list[str] = []
     if error:
-        params.append(f"error={quote(error)}")
+        safe_error = error if _SAFE_ERROR_CODE.match(error) else "provider_error"
+        params.append(f"error={quote(safe_error, safe='')}")
     if error_description:
-        params.append(f"error_description={quote(error_description)}")
+        clean_desc = re.sub(r"[\r\n\t]", " ", error_description).strip()[:200]
+        params.append(f"error_description={quote(clean_desc, safe='')}")
 
     url = target
     if params:
@@ -304,7 +310,11 @@ def oauth_callback(
             headers=clear_cookie_headers(settings),
         )
 
-    target = cookie_payload.get("next") or get_default_redirect_target(settings)
+    raw_target = cookie_payload.get("next")
+    try:
+        target = validate_redirect_target(raw_target, settings)
+    except APIException:
+        target = get_default_redirect_target(settings)
 
     # Trapping provider-side cancellation or failure before code exchange
     if error:

@@ -430,6 +430,55 @@ def test_callback_fallback_redirect_respects_settings_allowlist(client, monkeypa
     assert resp.headers["location"] == "https://prod.mathblasters.org"
 
 
+def test_callback_provider_error_query_param_sanitization_prevents_open_redirect(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    # Attempting to inject a protocol/URL in error param
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?error=https://evil.com&error_description=Injected%0d%0aHeader:evil&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert redirect_loc.startswith("/dashboard")
+    assert "error=provider_error" in redirect_loc
+    assert "https://evil.com" not in redirect_loc
+    assert "\r" not in redirect_loc and "\n" not in redirect_loc
+
+
+def test_callback_cookie_target_revalidated_against_allowlist(client, monkeypatch):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    # Cookie was signed with a target that is no longer in allowed_post_login_redirects
+    cookie_payload = {
+        "state": "state-xyz",
+        "verifier": "verifier-xyz",
+        "provider": "fake",
+        "next": "https://previously-allowed-domain.org/dashboard",
+    }
+    cookie_val = sign_state_cookie(cookie_payload, get_settings().auth_secret_key)
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+
+    # Current settings allow only localhost:5173
+    monkeypatch.setattr(get_settings(), "allowed_post_login_redirects", "http://localhost:5173")
+
+    resp = client.get(
+        "/api/auth/fake/callback?code=good-code&state=state-xyz",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 307
+    # Must fallback to default target instead of the disallowed target in the cookie
+    assert resp.headers["location"] == "http://localhost:5173"
+
+
 def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
     class FailingExchangeFake(FakeProvider):
         def __init__(self):
