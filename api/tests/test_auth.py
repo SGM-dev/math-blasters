@@ -493,6 +493,38 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
     assert "Connection refused" not in redirect_loc
 
 
+def test_callback_provider_value_error_redirects_and_clears_cookie(client):
+    class MalformedProfileFake(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def fetch_profile(self, tokens):
+            raise ValueError("Account ID not found in provider response")
+
+    fake = MalformedProfileFake()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "/dashboard" in redirect_loc
+    assert "error=provider_error" in redirect_loc
+
+    # Cookie must be cleared
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
 def test_callback_programming_error_in_provider_raises_500_not_masked(client):
     class BuggyProvider(FakeProvider):
         def __init__(self):
@@ -603,8 +635,9 @@ def test_verify_state_cookie_logs_debug_on_decode_error(caplog):
     import hashlib
     import hmac
 
+    key = hashlib.sha256(get_settings().auth_secret_key.encode("utf-8")).digest()
     sig = hmac.new(
-        get_settings().auth_secret_key.encode("utf-8"),
+        key,
         corrupted_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()

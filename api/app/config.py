@@ -64,10 +64,7 @@ def get_settings() -> Settings:
             f"AUTH_SECRET_KEY must be set to a secure, unique secret in "
             f"'{settings.env}' environment."
         )
-    if (
-        settings.auth_secret_key != INSECURE_DEV_AUTH_SECRET
-        and len(settings.auth_secret_key) < MIN_AUTH_SECRET_KEY_LENGTH
-    ):
+    if len(settings.auth_secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
         raise RuntimeError(
             f"AUTH_SECRET_KEY must be at least {MIN_AUTH_SECRET_KEY_LENGTH} characters long."
         )

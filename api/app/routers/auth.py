@@ -72,16 +72,22 @@ def generate_pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 600) -> str:
-    """Serialize and sign payload with an expiration timestamp using HMAC-SHA256."""
+def _derive_hmac_key(secret_key: str) -> bytes:
+    """Derive a fixed-length 256-bit HMAC key from the secret string."""
     if not secret_key or len(secret_key) < 32:
         raise ValueError("secret_key must be at least 32 characters long")
+    return hashlib.sha256(secret_key.encode("utf-8")).digest()
+
+
+def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 600) -> str:
+    """Serialize and sign payload with an expiration timestamp using HMAC-SHA256."""
+    key = _derive_hmac_key(secret_key)
     data = dict(payload)
     data["exp"] = int(time.time()) + max_age
     payload_bytes = json.dumps(data, separators=(",", ":")).encode("utf-8")
     payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
     sig = hmac.new(
-        secret_key.encode("utf-8"),
+        key,
         payload_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()
@@ -90,12 +96,17 @@ def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 6
 
 def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | None:
     """Verify HMAC signature and timestamp; return payload dict if valid, else None."""
-    if not cookie_value or "." not in cookie_value or not secret_key or len(secret_key) < 32:
+    if not cookie_value or "." not in cookie_value or not secret_key:
+        return None
+
+    try:
+        key = _derive_hmac_key(secret_key)
+    except ValueError:
         return None
 
     payload_b64, sig = cookie_value.split(".", 1)
     expected_sig = hmac.new(
-        secret_key.encode("utf-8"),
+        key,
         payload_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()
@@ -316,7 +327,7 @@ def oauth_callback(
     try:
         tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
         profile = provider_instance.fetch_profile(tokens)
-    except (httpx2.HTTPError, OSError):
+    except (httpx2.HTTPError, OSError, ValueError):
         logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
         return _redirect_clearing_cookie(target, settings, error="provider_error")
 
