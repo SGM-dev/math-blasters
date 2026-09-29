@@ -152,12 +152,37 @@ def test_start_cookie_contains_expected_payload_and_valid_signature(client):
     assert payload["exp"] > time.time()
 
 
-def test_start_never_leaks_secrets(client):
+def test_start_respects_path_prefix_on_allowed_origin(client, monkeypatch):
+    monkeypatch.setattr(
+        get_settings(),
+        "allowed_post_login_redirects",
+        "https://app.example.com/app,/",
+    )
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    # Allowed path prefix
+    resp_ok = client.get(
+        "/api/auth/fake/start?next=https://app.example.com/app/dashboard",
+        follow_redirects=False,
+    )
+    assert resp_ok.status_code == 307
+
+    # Disallowed path outside prefix on same origin
+    resp_fail = client.get(
+        "/api/auth/fake/start?next=https://app.example.com/other",
+        follow_redirects=False,
+    )
+    assert resp_fail.status_code == 400
+    assert resp_fail.json()["error"]["code"] == "validation_error"
+
+
+def test_start_never_leaks_secrets(client, monkeypatch):
     fake = FakeProvider(name="fake")
     register(fake)
 
     secret = "secret-super-confidential-token-12345"
-    get_settings().auth_secret_key = secret
+    monkeypatch.setattr(get_settings(), "auth_secret_key", secret)
 
     response = client.get("/api/auth/fake/start", follow_redirects=False)
     assert secret not in response.headers.get("location", "")

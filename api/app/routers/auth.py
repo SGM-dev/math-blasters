@@ -194,10 +194,13 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
 
     target_origin = f"{parsed.scheme}://{parsed.netloc}"
     for allowed in allowlist:
-        if allowed.startswith("http://") or allowed.startswith("https://"):
+        if allowed.startswith(("http://", "https://")):
             allowed_parsed = urlsplit(allowed)
-            if target_origin == f"{allowed_parsed.scheme}://{allowed_parsed.netloc}":
-                return target
+            allowed_origin = f"{allowed_parsed.scheme}://{allowed_parsed.netloc}"
+            if target_origin == allowed_origin:
+                allowed_path = allowed_parsed.path.rstrip("/")
+                if not allowed_path or parsed.path.startswith(allowed_path):
+                    return target
 
     raise APIException(
         status_code=status.HTTP_400_BAD_REQUEST,
