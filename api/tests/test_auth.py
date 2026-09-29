@@ -8,9 +8,7 @@ from app.config import get_settings
 from app.main import create_app
 from app.providers import ProviderProfile, register
 from app.routers.auth import (
-    default_on_profile,
     on_profile,
-    set_on_profile_hook,
     sign_state_cookie,
     verify_state_cookie,
 )
@@ -29,26 +27,14 @@ class ExchangeTrackingFake(FakeProvider):
 
 @pytest.fixture(autouse=True)
 def clean_registry(monkeypatch):
-    """Ensure each test runs with a clean provider registry and default on_profile hook."""
+    """Ensure each test runs with a clean provider registry."""
     monkeypatch.setattr("app.providers._registry", {})
-    set_on_profile_hook(default_on_profile)
 
 
 @pytest.fixture
 def client():
     app = create_app()
     return TestClient(app)
-
-
-def extract_cookie_value(response, cookie_name: str = "oauth_flow") -> str | None:
-    cookie_header = response.headers.get("set-cookie")
-    if not cookie_header:
-        return None
-    for part in cookie_header.split(";"):
-        part = part.strip()
-        if part.startswith(f"{cookie_name}="):
-            return part.split("=", 1)[1]
-    return None
 
 
 def test_start_unknown_provider_returns_404(client):
@@ -129,7 +115,7 @@ def test_start_accepts_allowed_redirect_target(client):
     response = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     assert response.status_code == 307
 
-    cookie_val = extract_cookie_value(response)
+    cookie_val = response.cookies.get("oauth_flow")
     assert cookie_val is not None
     payload = verify_state_cookie(cookie_val, get_settings().auth_secret_key)
     assert payload is not None
@@ -141,7 +127,7 @@ def test_start_cookie_contains_expected_payload_and_valid_signature(client):
     register(fake)
 
     response = client.get("/api/auth/fake/start", follow_redirects=False)
-    cookie_val = extract_cookie_value(response)
+    cookie_val = response.cookies.get("oauth_flow")
     assert cookie_val is not None
 
     payload = verify_state_cookie(cookie_val, get_settings().auth_secret_key)
@@ -207,12 +193,12 @@ def test_callback_missing_cookie_returns_400_validation_error(client):
     assert data["error"]["code"] == "validation_error"
 
 
-def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client):
+def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client, monkeypatch):
     fake = FakeProvider(name="fake")
     register(fake)
 
     captured_profiles: list[ProviderProfile] = []
-    set_on_profile_hook(lambda p: captured_profiles.append(p))
+    monkeypatch.setattr("app.routers.auth.on_profile", lambda p: captured_profiles.append(p))
 
     # 1. Start flow to get cookie and state
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
@@ -220,7 +206,7 @@ def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client):
     location = start_resp.headers["location"]
     params = parse_qs(urlsplit(location).query)
     state = params["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     # 2. Callback with valid code and state
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
@@ -250,7 +236,7 @@ def test_callback_mismatched_state_returns_400_validation_error(client):
     register(fake)
 
     start_resp = client.get("/api/auth/fake/start", follow_redirects=False)
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     callback_resp = client.get(
@@ -277,7 +263,7 @@ def test_callback_missing_state_returns_400_validation_error(client):
     register(fake)
 
     start_resp = client.get("/api/auth/fake/start", follow_redirects=False)
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     callback_resp = client.get(
@@ -307,7 +293,7 @@ def test_callback_provider_mismatch_returns_400_validation_error(client):
     start_resp = client.get("/api/auth/fake/start", follow_redirects=False)
     location = start_resp.headers["location"]
     state = parse_qs(urlsplit(location).query)["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     # Attempt to send the "fake" cookie to "other" callback
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
@@ -329,7 +315,7 @@ def test_callback_provider_access_denied_redirects_and_clears_cookie(client):
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     location = start_resp.headers["location"]
     state = parse_qs(urlsplit(location).query)["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     callback_resp = client.get(
@@ -391,7 +377,7 @@ def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     location = start_resp.headers["location"]
     state = parse_qs(urlsplit(location).query)["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     callback_resp = client.get(
@@ -425,7 +411,7 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     location = start_resp.headers["location"]
     state = parse_qs(urlsplit(location).query)["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     callback_resp = client.get(
@@ -456,19 +442,21 @@ def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, cap
     assert secret_value not in caplog.text
 
 
-def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_provider(client):
+def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_provider(
+    client, monkeypatch
+):
     fake = FakeProvider(name="fake")
     register(fake)
 
     def failing_hook(profile):
         raise RuntimeError("Database write failure during account creation")
 
-    set_on_profile_hook(failing_hook)
+    monkeypatch.setattr("app.routers.auth.on_profile", failing_hook)
 
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     location = start_resp.headers["location"]
     state = parse_qs(urlsplit(location).query)["state"][0]
-    cookie_val = extract_cookie_value(start_resp)
+    cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
     resp = client.get(
