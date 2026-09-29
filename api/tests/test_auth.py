@@ -1,6 +1,7 @@
 import time
 from urllib.parse import parse_qs, urlsplit
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -267,3 +268,118 @@ def test_callback_provider_mismatch_returns_400_validation_error(client):
     data = callback_resp.json()
     assert data["error"]["code"] == "validation_error"
     assert "mismatch" in data["error"]["message"].lower()
+
+
+def test_callback_provider_access_denied_redirects_and_clears_cookie(client):
+    class ExchangeTrackingFake(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+            self.exchange_called = False
+
+        def exchange_code(self, code, code_verifier):
+            self.exchange_called = True
+            return super().exchange_code(code, code_verifier)
+
+    fake = ExchangeTrackingFake()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    location = start_resp.headers["location"]
+    state = parse_qs(urlsplit(location).query)["state"][0]
+    cookie_val = extract_cookie_value(start_resp)
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?error=access_denied&error_description=User+declined&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "/dashboard" in redirect_loc
+    assert "error=" in redirect_loc
+
+    # State cookie should be cleared
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+    # Code exchange must NOT be attempted when access was denied
+    assert fake.exchange_called is False
+
+
+def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
+    class FailingExchangeFake(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise httpx2.HTTPError("Token exchange rejected by provider")
+
+    fake = FailingExchangeFake()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    location = start_resp.headers["location"]
+    state = parse_qs(urlsplit(location).query)["state"][0]
+    cookie_val = extract_cookie_value(start_resp)
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=bad-code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "/dashboard" in redirect_loc
+    assert "error=" in redirect_loc
+
+    # Cookie must be cleared so no half-session remains
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
+def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
+    class NetworkErrorFake(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise httpx2.ConnectError("Connection refused to auth provider")
+
+    fake = NetworkErrorFake()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    location = start_resp.headers["location"]
+    state = parse_qs(urlsplit(location).query)["state"][0]
+    cookie_val = extract_cookie_value(start_resp)
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+
+    # Must redirect cleanly rather than failing with an unhandled 500 error
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "error=" in redirect_loc
+
+
+def test_client_secrets_never_leak_in_logs_or_responses(client, caplog):
+    secret_value = "super-secret-client-credential-xyz987"
+    get_settings().github_client_secret = secret_value
+    get_settings().auth_secret_key = secret_value
+
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    assert secret_value not in start_resp.headers.get("location", "")
+    assert secret_value not in start_resp.headers.get("set-cookie", "")
+
+    # Check request log output
+    assert secret_value not in caplog.text
