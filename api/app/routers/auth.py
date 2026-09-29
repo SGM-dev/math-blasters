@@ -8,9 +8,9 @@ import secrets
 import time
 from collections.abc import Callable
 from typing import Annotated, Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import RedirectResponse
 
 from app.config import Settings, get_settings
@@ -180,4 +180,91 @@ def start_oauth(
         path="/api/auth",
         max_age=600,
     )
+    return response
+
+
+@router.get("/{provider}/callback")
+def oauth_callback(
+    provider: str,
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    settings: Annotated[Settings, Depends(get_settings)] = None,
+):
+    provider_instance = get_provider(provider)
+    if provider_instance is None:
+        raise APIException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="not_found",
+            message=f"OAuth provider '{provider}' is not configured",
+        )
+
+    cookie_val = request.cookies.get("oauth_flow")
+    cookie_payload = (
+        verify_state_cookie(cookie_val, settings.auth_secret_key) if cookie_val else None
+    )
+    if not cookie_payload:
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message="Missing, invalid, or expired OAuth state cookie",
+        )
+
+    if cookie_payload.get("provider") != provider:
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message=(
+                f"OAuth provider mismatch: expected '{cookie_payload.get('provider')}', "
+                f"got '{provider}'"
+            ),
+        )
+
+    expected_state = cookie_payload.get("state")
+    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message="Missing or mismatched OAuth state parameter",
+        )
+
+    target = cookie_payload.get("next") or "http://localhost:5173"
+
+    # Trapping provider-side cancellation or failure before code exchange
+    if error:
+        err_param = quote(error)
+        sep = "&" if "?" in target else "?"
+        response = RedirectResponse(
+            url=f"{target}{sep}error={err_param}",
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+        response.delete_cookie(key="oauth_flow", path="/api/auth")
+        return response
+
+    verifier = cookie_payload.get("verifier")
+    if not code or not verifier:
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message="Missing authorization code or verifier",
+        )
+
+    try:
+        tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
+        profile = provider_instance.fetch_profile(tokens)
+        get_on_profile_hook()(profile)
+    except Exception as exc:
+        sep = "&" if "?" in target else "?"
+        reason = quote(str(exc) or "provider_error")
+        response = RedirectResponse(
+            url=f"{target}{sep}error={reason}",
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+        response.delete_cookie(key="oauth_flow", path="/api/auth")
+        return response
+
+    response = RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    response.delete_cookie(key="oauth_flow", path="/api/auth")
     return response
