@@ -74,6 +74,8 @@ def generate_pkce_pair() -> tuple[str, str]:
 
 def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 600) -> str:
     """Serialize and sign payload with an expiration timestamp using HMAC-SHA256."""
+    if not secret_key or len(secret_key) < 32:
+        raise ValueError("secret_key must be at least 32 characters long")
     data = dict(payload)
     data["exp"] = int(time.time()) + max_age
     payload_bytes = json.dumps(data, separators=(",", ":")).encode("utf-8")
@@ -88,7 +90,7 @@ def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 6
 
 def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | None:
     """Verify HMAC signature and timestamp; return payload dict if valid, else None."""
-    if not cookie_value or "." not in cookie_value:
+    if not cookie_value or "." not in cookie_value or not secret_key or len(secret_key) < 32:
         return None
 
     payload_b64, sig = cookie_value.split(".", 1)

@@ -4,6 +4,9 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+MIN_AUTH_SECRET_KEY_LENGTH = 32
+INSECURE_DEV_AUTH_SECRET = "insecure-dev-secret-key-change-in-production"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -27,7 +30,7 @@ class Settings(BaseSettings):
     env: str = "development"
 
     # Secret key for HMAC-signing OAuth state cookies.
-    auth_secret_key: str = "insecure-dev-secret-key-change-in-production"
+    auth_secret_key: str = INSECURE_DEV_AUTH_SECRET
 
     # Public base URL of the API (for constructing callback URLs).
     api_base_url: str = "http://localhost:8000"
@@ -55,11 +58,17 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    is_dev_or_test = settings.env.lower() in ("development", "test")
+    if not is_dev_or_test and settings.auth_secret_key == INSECURE_DEV_AUTH_SECRET:
+        raise RuntimeError(
+            f"AUTH_SECRET_KEY must be set to a secure, unique secret in "
+            f"'{settings.env}' environment."
+        )
     if (
-        settings.env.lower() == "production"
-        and settings.auth_secret_key == "insecure-dev-secret-key-change-in-production"
+        settings.auth_secret_key != INSECURE_DEV_AUTH_SECRET
+        and len(settings.auth_secret_key) < MIN_AUTH_SECRET_KEY_LENGTH
     ):
         raise RuntimeError(
-            "AUTH_SECRET_KEY must be set to a secure, unique secret in production environments."
+            f"AUTH_SECRET_KEY must be at least {MIN_AUTH_SECRET_KEY_LENGTH} characters long."
         )
     return settings

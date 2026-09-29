@@ -570,6 +570,39 @@ def test_production_environment_rejects_insecure_auth_secret_key(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_staging_environment_rejects_insecure_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "staging")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "insecure-dev-secret-key-change-in-production")
+    try:
+        with pytest.raises(RuntimeError, match="AUTH_SECRET_KEY must be set to a secure"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_non_development_environment_rejects_short_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "staging")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "too-short-secret-key")
+    try:
+        with pytest.raises(RuntimeError, match="at least 32 characters long"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_development_environment_rejects_custom_short_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "short-custom-dev-key")
+    try:
+        with pytest.raises(RuntimeError, match="at least 32 characters long"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
 def test_production_environment_accepts_secure_auth_secret_key(monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setenv("ENV", "production")
@@ -579,3 +612,11 @@ def test_production_environment_accepts_secure_auth_secret_key(monkeypatch):
         assert settings.auth_secret_key == "super-secret-production-random-key-9876543210"
     finally:
         get_settings.cache_clear()
+
+
+def test_sign_and_verify_state_cookie_reject_short_key():
+    payload = {"state": "xyz", "verifier": "abc"}
+    with pytest.raises(ValueError, match="at least 32 characters long"):
+        sign_state_cookie(payload, "short-key")
+
+    assert verify_state_cookie("some.cookie.val", "short-key") is None
