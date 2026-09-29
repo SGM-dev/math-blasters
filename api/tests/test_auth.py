@@ -1,14 +1,18 @@
 import time
 from urllib.parse import parse_qs, urlsplit
 
-import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import create_app
 from app.providers import ProviderProfile, register
-from app.routers.auth import default_on_profile, set_on_profile_hook, verify_state_cookie
+from app.routers.auth import (
+    default_on_profile,
+    set_on_profile_hook,
+    sign_state_cookie,
+    verify_state_cookie,
+)
 from tests.fake_provider import FakeProvider
 
 
@@ -308,13 +312,39 @@ def test_callback_provider_access_denied_redirects_and_clears_cookie(client):
     assert fake.exchange_called is False
 
 
+def test_callback_fallback_redirect_respects_settings_allowlist(client, monkeypatch):
+    monkeypatch.setattr(
+        get_settings(),
+        "allowed_post_login_redirects",
+        "https://prod.mathblasters.org,/",
+    )
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    cookie_payload = {
+        "state": "state-xyz",
+        "verifier": "verifier-xyz",
+        "provider": "fake",
+        "next": None,
+    }
+    cookie_val = sign_state_cookie(cookie_payload, get_settings().auth_secret_key)
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+
+    resp = client.get(
+        "/api/auth/fake/callback?code=good-code&state=state-xyz",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "https://prod.mathblasters.org"
+
+
 def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
     class FailingExchangeFake(FakeProvider):
         def __init__(self):
             super().__init__(name="fake")
 
         def exchange_code(self, code, code_verifier):
-            raise httpx2.HTTPError("Token exchange rejected by provider")
+            raise RuntimeError("Secret internal database or provider error")
 
     fake = FailingExchangeFake()
     register(fake)
@@ -333,7 +363,8 @@ def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
     assert callback_resp.status_code == 307
     redirect_loc = callback_resp.headers["location"]
     assert "/dashboard" in redirect_loc
-    assert "error=" in redirect_loc
+    assert "error=provider_error" in redirect_loc
+    assert "Secret internal" not in redirect_loc
 
     # Cookie must be cleared so no half-session remains
     cookie_header = callback_resp.headers.get("set-cookie")
@@ -347,7 +378,7 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
             super().__init__(name="fake")
 
         def exchange_code(self, code, code_verifier):
-            raise httpx2.ConnectError("Connection refused to auth provider")
+            raise ConnectionError("Connection refused to auth provider")
 
     fake = NetworkErrorFake()
     register(fake)
@@ -363,10 +394,11 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
         follow_redirects=False,
     )
 
-    # Must redirect cleanly rather than failing with an unhandled 500 error
+    # Must redirect cleanly with generic provider_error rather than leaking raw exception
     assert callback_resp.status_code == 307
     redirect_loc = callback_resp.headers["location"]
-    assert "error=" in redirect_loc
+    assert "error=provider_error" in redirect_loc
+    assert "Connection refused" not in redirect_loc
 
 
 def test_client_secrets_never_leak_in_logs_or_responses(client, caplog):

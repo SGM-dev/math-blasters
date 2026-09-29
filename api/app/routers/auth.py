@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from app.models import Learner, OAuthIdentity
 from app.providers import ProviderProfile, get_provider
 from app.schemas import AccountMeGetResponse
 
+logger = logging.getLogger("api.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -111,8 +113,8 @@ def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | 
     if not hmac.compare_digest(sig, expected_sig):
         return None
 
-    padding = len(payload_b64) % 4
-    padded_b64 = payload_b64 + ("=" * (4 - padding) if padding else "")
+    padding = (-len(payload_b64)) % 4
+    padded_b64 = payload_b64 + ("=" * padding)
 
     try:
         data = json.loads(base64.urlsafe_b64decode(padded_b64.encode("ascii")).decode("utf-8"))
@@ -128,10 +130,16 @@ def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | 
     return data
 
 
+def get_default_redirect_target(settings: Settings) -> str:
+    """Return the primary allowed redirect destination, defaulting to root if none."""
+    allowlist = settings.allowed_post_login_redirect_list
+    return allowlist[0] if allowlist else "/"
+
+
 def validate_redirect_target(target: str | None, settings: Settings) -> str:
     """Validate that target matches the allowed post-login redirect allowlist."""
     allowlist = settings.allowed_post_login_redirect_list
-    default_target = allowlist[0] if allowlist else "http://localhost:5173"
+    default_target = get_default_redirect_target(settings)
 
     if not target:
         return default_target
@@ -267,7 +275,7 @@ def oauth_callback(
             message="Missing or mismatched OAuth state parameter",
         )
 
-    target = cookie_payload.get("next") or "http://localhost:5173"
+    target = cookie_payload.get("next") or get_default_redirect_target(settings)
 
     # Trapping provider-side cancellation or failure before code exchange
     if error:
@@ -292,11 +300,11 @@ def oauth_callback(
         tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
         profile = provider_instance.fetch_profile(tokens)
         get_on_profile_hook()(profile)
-    except Exception as exc:
+    except Exception:
+        logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
         sep = "&" if "?" in target else "?"
-        reason = quote(str(exc) or "provider_error")
         response = RedirectResponse(
-            url=f"{target}{sep}error={reason}",
+            url=f"{target}{sep}error=provider_error",
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
         )
         response.delete_cookie(key="oauth_flow", path="/api/auth")
