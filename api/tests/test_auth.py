@@ -523,3 +523,25 @@ def test_verify_state_cookie_logs_debug_on_decode_error(caplog):
     result = verify_state_cookie(f"{corrupted_b64}.{sig}", get_settings().auth_secret_key)
     assert result is None
     assert "Failed to decode state cookie" in caplog.text
+
+
+def test_production_environment_rejects_insecure_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "insecure-dev-secret-key-change-in-production")
+    try:
+        with pytest.raises(RuntimeError, match="AUTH_SECRET_KEY must be set to a secure"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_production_environment_accepts_secure_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "super-secret-production-random-key-9876543210")
+    try:
+        settings = get_settings()
+        assert settings.auth_secret_key == "super-secret-production-random-key-9876543210"
+    finally:
+        get_settings.cache_clear()

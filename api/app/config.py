@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Default rate limit for POST /api/completions
     completions_rate_limit: str = "20/minute"
 
+    # Environment mode: 'development', 'test', 'production'
+    env: str = "development"
+
     # Secret key for HMAC-signing OAuth state cookies.
     auth_secret_key: str = "insecure-dev-secret-key-change-in-production"
 
@@ -51,4 +54,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if (
+        settings.env.lower() == "production"
+        and settings.auth_secret_key == "insecure-dev-secret-key-change-in-production"
+    ):
+        raise RuntimeError(
+            "AUTH_SECRET_KEY must be set to a secure, unique secret in production environments."
+        )
+    return settings
