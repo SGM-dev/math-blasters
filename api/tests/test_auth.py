@@ -1,6 +1,7 @@
 import time
 from urllib.parse import parse_qs, urlsplit
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -381,7 +382,7 @@ def test_callback_token_exchange_failure_redirects_and_clears_cookie(client):
             super().__init__(name="fake")
 
         def exchange_code(self, code, code_verifier):
-            raise RuntimeError("Secret internal database or provider error")
+            raise httpx2.HTTPError("Secret internal database or provider error")
 
     fake = FailingExchangeFake()
     register(fake)
@@ -436,6 +437,39 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
     redirect_loc = callback_resp.headers["location"]
     assert "error=provider_error" in redirect_loc
     assert "Connection refused" not in redirect_loc
+
+
+def test_callback_programming_error_in_provider_raises_500_not_masked(client):
+    class BuggyProvider(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise AttributeError("'NoneType' object has no attribute 'get'")
+
+    fake = BuggyProvider()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    # Programming errors must not be caught as provider_error; bubble up as unhandled
+    with pytest.raises(AttributeError, match="has no attribute 'get'"):
+        client.get(
+            f"/api/auth/fake/callback?code=good-code&state={state}",
+            follow_redirects=False,
+        )
+
+    # When client suppresses exception propagation, server returns HTTP 500
+    safe_client = TestClient(client.app, raise_server_exceptions=False)
+    safe_client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    resp = safe_client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 500
 
 
 def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, caplog):

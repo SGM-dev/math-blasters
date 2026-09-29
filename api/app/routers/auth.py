@@ -12,6 +12,7 @@ import time
 from typing import Annotated, Any
 from urllib.parse import quote, urlsplit
 
+import httpx2
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -313,7 +314,7 @@ def oauth_callback(
     try:
         tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
         profile = provider_instance.fetch_profile(tokens)
-    except Exception:
+    except (httpx2.HTTPError, OSError):
         logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
         return _redirect_clearing_cookie(target, settings, error="provider_error")
 
