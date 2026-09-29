@@ -202,6 +202,60 @@ def test_callback_missing_cookie_returns_400_validation_error(client):
     assert data["error"]["code"] == "validation_error"
 
 
+def test_callback_tampered_state_cookie_returns_400_validation_error(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    payload_b64, _ = cookie_val.split(".", 1)
+    tampered_cookie = f"{payload_b64}.bad-hmac-signature-1234567890abcdef"
+
+    client.cookies.set("oauth_flow", tampered_cookie, path="/api/auth")
+    response = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"]["code"] == "validation_error"
+    assert "Missing, invalid, or expired" in data["error"]["message"]
+
+    cookie_header = response.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
+def test_callback_expired_state_cookie_returns_400_validation_error(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    settings = get_settings()
+    cookie_payload = {
+        "state": "expired-state",
+        "verifier": "test-verifier-string-1234567890",
+        "provider": "fake",
+        "next": "/dashboard",
+    }
+    expired_cookie = sign_state_cookie(cookie_payload, settings.auth_secret_key, max_age=-10)
+
+    client.cookies.set("oauth_flow", expired_cookie, path="/api/auth")
+    response = client.get(
+        "/api/auth/fake/callback?code=good-code&state=expired-state",
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"]["code"] == "validation_error"
+    assert "Missing, invalid, or expired" in data["error"]["message"]
+
+    cookie_header = response.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
 def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client, monkeypatch):
     fake = FakeProvider(name="fake")
     register(fake)
