@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Production-safe default; local HTTP development must explicitly opt out.
     cookie_secure: bool = True
 
+    # Default rate limit for POST /api/completions
+    completions_rate_limit: str = "20/minute"
+
     # Secret key for HMAC-signing OAuth state cookies.
     auth_secret_key: str = "insecure-dev-secret-key-change-in-production"
 

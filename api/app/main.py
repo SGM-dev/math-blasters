@@ -16,6 +16,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -159,6 +161,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     app.include_router(health.router, prefix="/api")
+
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
     app.include_router(auth.router, prefix="/api")
 
     return app

@@ -30,6 +30,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Local Compose serves HTTP; production deployments must set this true.
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COMPLETIONS_RATE_LIMIT: ${COMPLETIONS_RATE_LIMIT:-20/minute}
     ports:
       - "8000:8000"
     depends_on:
