@@ -90,6 +90,13 @@ def test_start_rejects_disallowed_redirect_target_with_400_validation_error(clie
     assert data_rel["error"]["code"] == "validation_error"
     assert "not allowed" in data_rel["error"]["message"]
 
+    # Protocol-relative URL with backslash bypass
+    resp_bs = client.get(r"/api/auth/fake/start?next=/\attacker.example/phish")
+    assert resp_bs.status_code == 400
+    data_bs = resp_bs.json()
+    assert data_bs["error"]["code"] == "validation_error"
+    assert "not allowed" in data_bs["error"]["message"]
+
 
 def test_start_accepts_allowed_redirect_target(client):
     fake = FakeProvider(name="fake")
@@ -216,6 +223,11 @@ def test_callback_mismatched_state_returns_400_validation_error(client):
     assert data["error"]["code"] == "validation_error"
     assert "state" in data["error"]["message"].lower()
 
+    # Cookie must be cleared upon validation failure
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
     # Code exchange must NOT be called on state mismatch!
     assert fake.exchange_called is False
 
@@ -245,6 +257,11 @@ def test_callback_missing_state_returns_400_validation_error(client):
     assert callback_resp.status_code == 400
     data = callback_resp.json()
     assert data["error"]["code"] == "validation_error"
+
+    # Cookie must be cleared upon validation failure
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
 
     # Code exchange must NOT be called!
     assert fake.exchange_called is False

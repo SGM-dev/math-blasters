@@ -136,6 +136,13 @@ def get_default_redirect_target(settings: Settings) -> str:
     return allowlist[0] if allowlist else "/"
 
 
+def _clear_cookie_headers() -> dict[str, str]:
+    dummy_resp = Response()
+    dummy_resp.delete_cookie(key="oauth_flow", path="/api/auth")
+    cookie_hdr = dummy_resp.headers.get("set-cookie")
+    return {"Set-Cookie": cookie_hdr} if cookie_hdr else {}
+
+
 def validate_redirect_target(target: str | None, settings: Settings) -> str:
     """Validate that target matches the allowed post-login redirect allowlist."""
     allowlist = settings.allowed_post_login_redirect_list
@@ -144,8 +151,8 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
     if not target:
         return default_target
 
-    # Reject protocol-relative URLs (e.g. "//evil.example")
-    if target.startswith("//"):
+    # Reject protocol-relative URLs (e.g. "//evil.example" or "/\evil.example")
+    if target.startswith(("//", "/\\", "\\")):
         raise APIException(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
@@ -255,6 +262,7 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing, invalid, or expired OAuth state cookie",
+            headers=_clear_cookie_headers(),
         )
 
     if cookie_payload.get("provider") != provider:
@@ -265,6 +273,7 @@ def oauth_callback(
                 f"OAuth provider mismatch: expected '{cookie_payload.get('provider')}', "
                 f"got '{provider}'"
             ),
+            headers=_clear_cookie_headers(),
         )
 
     expected_state = cookie_payload.get("state")
@@ -273,6 +282,7 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing or mismatched OAuth state parameter",
+            headers=_clear_cookie_headers(),
         )
 
     target = cookie_payload.get("next") or get_default_redirect_target(settings)
@@ -294,6 +304,7 @@ def oauth_callback(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
             message="Missing authorization code or verifier",
+            headers=_clear_cookie_headers(),
         )
 
     try:
