@@ -21,7 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from app.config import get_settings
-from app.routers import health
+from app.routers import auth, health
 from app.schemas import ErrorDetail, ErrorEnvelope
 
 
@@ -46,19 +46,21 @@ def status_code_to_error_code(status_code: int) -> str:
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     # `exc.detail` is always a message the app deliberately chose to raise with --
     # unhandled exceptions never reach this handler, so there's nothing to mask here.
-    code = status_code_to_error_code(exc.status_code)
+    code = getattr(exc, "code", None) or status_code_to_error_code(exc.status_code)
     message = str(exc.detail)
+    details = getattr(exc, "details", None)
 
     envelope = ErrorEnvelope(
         error=ErrorDetail(
             code=code,
             message=message,
-            details=None,
+            details=details,
         )
     )
     return JSONResponse(
         status_code=exc.status_code,
         content=envelope.model_dump(),
+        headers=getattr(exc, "headers", None),
     )
 
 
@@ -157,6 +159,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     app.include_router(health.router, prefix="/api")
+    app.include_router(auth.router, prefix="/api")
 
     return app
 
