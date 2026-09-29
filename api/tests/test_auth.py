@@ -97,6 +97,19 @@ def test_start_rejects_disallowed_redirect_target_with_400_validation_error(clie
     assert data_bs["error"]["code"] == "validation_error"
     assert "not allowed" in data_bs["error"]["message"]
 
+    # Userinfo in netloc
+    resp_user = client.get("/api/auth/fake/start?next=http://user@localhost:5173")
+    assert resp_user.status_code == 400
+    data_user = resp_user.json()
+    assert data_user["error"]["code"] == "validation_error"
+    assert "not allowed" in data_user["error"]["message"]
+
+    resp_user2 = client.get("/api/auth/fake/start?next=http://localhost:5173@evil.example.com")
+    assert resp_user2.status_code == 400
+    data_user2 = resp_user2.json()
+    assert data_user2["error"]["code"] == "validation_error"
+    assert "not allowed" in data_user2["error"]["message"]
+
 
 def test_start_accepts_allowed_redirect_target(client):
     fake = FakeProvider(name="fake")
@@ -418,10 +431,10 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
     assert "Connection refused" not in redirect_loc
 
 
-def test_client_secrets_never_leak_in_logs_or_responses(client, caplog):
+def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, caplog):
     secret_value = "super-secret-client-credential-xyz987"
-    get_settings().github_client_secret = secret_value
-    get_settings().auth_secret_key = secret_value
+    monkeypatch.setattr(get_settings(), "github_client_secret", secret_value)
+    monkeypatch.setattr(get_settings(), "auth_secret_key", secret_value)
 
     fake = FakeProvider(name="fake")
     register(fake)
@@ -432,3 +445,44 @@ def test_client_secrets_never_leak_in_logs_or_responses(client, caplog):
 
     # Check request log output
     assert secret_value not in caplog.text
+
+
+def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_provider(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    def failing_hook(profile):
+        raise RuntimeError("Database write failure during account creation")
+
+    set_on_profile_hook(failing_hook)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    location = start_resp.headers["location"]
+    state = parse_qs(urlsplit(location).query)["state"][0]
+    cookie_val = extract_cookie_value(start_resp)
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    with pytest.raises(RuntimeError, match="Database write failure"):
+        client.get(
+            f"/api/auth/fake/callback?code=good-code&state={state}",
+            follow_redirects=False,
+        )
+
+
+def test_verify_state_cookie_logs_debug_on_decode_error(caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="api.auth")
+    # Craft a cookie whose HMAC signature is valid for a corrupted base64 string
+    corrupted_b64 = "invalid-b64-content!!!"
+    import hashlib
+    import hmac
+
+    sig = hmac.new(
+        get_settings().auth_secret_key.encode("utf-8"),
+        corrupted_b64.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    result = verify_state_cookie(f"{corrupted_b64}.{sig}", get_settings().auth_secret_key)
+    assert result is None
+    assert "Failed to decode state cookie" in caplog.text

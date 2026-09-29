@@ -118,13 +118,16 @@ def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | 
 
     try:
         data = json.loads(base64.urlsafe_b64decode(padded_b64.encode("ascii")).decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to decode state cookie: %s", exc, exc_info=True)
         return None
 
     if not isinstance(data, dict):
+        logger.debug("State cookie payload is not a dictionary")
         return None
 
     if time.time() > data.get("exp", 0):
+        logger.debug("State cookie expired")
         return None
 
     return data
@@ -175,6 +178,13 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
 
     parsed = urlsplit(target)
     if parsed.scheme not in ("http", "https"):
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message=f"Redirect target '{target}' is not allowed",
+        )
+
+    if "@" in parsed.netloc:
         raise APIException(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
@@ -310,7 +320,6 @@ def oauth_callback(
     try:
         tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
         profile = provider_instance.fetch_profile(tokens)
-        get_on_profile_hook()(profile)
     except Exception:
         logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
         sep = "&" if "?" in target else "?"
@@ -320,6 +329,8 @@ def oauth_callback(
         )
         response.delete_cookie(key="oauth_flow", path="/api/auth")
         return response
+
+    get_on_profile_hook()(profile)
 
     response = RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
     response.delete_cookie(key="oauth_flow", path="/api/auth")
