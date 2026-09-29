@@ -1,4 +1,16 @@
-"""Auth routes: OAuth code flow, current account, and logout."""
+"""Auth routes: OAuth code flow, current account, and logout.
+
+Threat Model (Stateless PKCE):
+- Storage: Flow state and PKCE verifier are kept in a signed `oauth_flow` cookie
+  rather than a server-side cache/session store to remain stateless per spec.
+- Front-channel isolation (RFC 7636): The auth code travels in the URL query string;
+  the verifier travels strictly in the HTTPS `Cookie` header. Code interception does
+  not leak the cookie.
+- Confidential client: Token exchange requires the server-held `client_secret`.
+  Stolen verifier + code cannot be exchanged directly with the provider.
+- Cookie controls: `HttpOnly=True` (no JS access), `SameSite="lax"`, `Secure` in non-dev,
+  `Path="/api/auth"`, 10-minute TTL, single-use deletion, and HMAC-SHA256 integrity.
+"""
 
 from __future__ import annotations
 
