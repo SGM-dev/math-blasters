@@ -9,11 +9,22 @@ from app.main import create_app
 from app.providers import ProviderProfile, register
 from app.routers.auth import (
     default_on_profile,
+    on_profile,
     set_on_profile_hook,
     sign_state_cookie,
     verify_state_cookie,
 )
 from tests.fake_provider import FakeProvider
+
+
+class ExchangeTrackingFake(FakeProvider):
+    def __init__(self, name="fake"):
+        super().__init__(name=name)
+        self.exchange_called = False
+
+    def exchange_code(self, code, code_verifier):
+        self.exchange_called = True
+        return super().exchange_code(code, code_verifier)
 
 
 @pytest.fixture(autouse=True)
@@ -210,15 +221,6 @@ def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client):
 
 
 def test_callback_mismatched_state_returns_400_validation_error(client):
-    class ExchangeTrackingFake(FakeProvider):
-        def __init__(self):
-            super().__init__(name="fake")
-            self.exchange_called = False
-
-        def exchange_code(self, code, code_verifier):
-            self.exchange_called = True
-            return super().exchange_code(code, code_verifier)
-
     fake = ExchangeTrackingFake()
     register(fake)
 
@@ -246,15 +248,6 @@ def test_callback_mismatched_state_returns_400_validation_error(client):
 
 
 def test_callback_missing_state_returns_400_validation_error(client):
-    class ExchangeTrackingFake(FakeProvider):
-        def __init__(self):
-            super().__init__(name="fake")
-            self.exchange_called = False
-
-        def exchange_code(self, code, code_verifier):
-            self.exchange_called = True
-            return super().exchange_code(code, code_verifier)
-
     fake = ExchangeTrackingFake()
     register(fake)
 
@@ -305,15 +298,6 @@ def test_callback_provider_mismatch_returns_400_validation_error(client):
 
 
 def test_callback_provider_access_denied_redirects_and_clears_cookie(client):
-    class ExchangeTrackingFake(FakeProvider):
-        def __init__(self):
-            super().__init__(name="fake")
-            self.exchange_called = False
-
-        def exchange_code(self, code, code_verifier):
-            self.exchange_called = True
-            return super().exchange_code(code, code_verifier)
-
     fake = ExchangeTrackingFake()
     register(fake)
 
@@ -462,11 +446,39 @@ def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_
     cookie_val = extract_cookie_value(start_resp)
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
-    with pytest.raises(RuntimeError, match="Database write failure"):
-        client.get(
-            f"/api/auth/fake/callback?code=good-code&state={state}",
-            follow_redirects=False,
-        )
+    resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "internal"
+    cookie_header = resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
+def test_create_app_registers_github_provider_when_configured(monkeypatch):
+    from app.providers import get_provider
+
+    monkeypatch.setattr(get_settings(), "github_client_id", "test-gh-client-id")
+    monkeypatch.setattr(get_settings(), "github_client_secret", "test-gh-client-secret")
+    create_app()
+    gh = get_provider("github")
+    assert gh is not None
+    assert gh.client_id == "test-gh-client-id"
+    assert gh.redirect_uri.endswith("/api/auth/github/callback")
+
+
+def test_on_profile_stub_callable():
+    profile = ProviderProfile(
+        provider="github",
+        provider_account_id="123",
+        email="a@b.com",
+        email_verified=True,
+        display_name="A",
+        avatar_url=None,
+    )
+    assert on_profile(profile) is None
 
 
 def test_verify_state_cookie_logs_debug_on_decode_error(caplog):

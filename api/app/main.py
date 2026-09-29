@@ -135,9 +135,27 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             logger.log(logging.ERROR if exception else logging.INFO, json.dumps(log_record))
 
 
+def register_configured_providers(settings) -> None:
+    """Register OAuth providers whose client credentials exist in application settings."""
+    if settings.github_client_id and settings.github_client_secret:
+        from app.providers import get_provider, register
+        from app.providers.github import GithubProvider
+
+        if get_provider("github") is None:
+            callback_url = f"{settings.api_base_url.rstrip('/')}/api/auth/github/callback"
+            register(
+                GithubProvider(
+                    client_id=settings.github_client_id,
+                    client_secret=settings.github_client_secret,
+                    redirect_uri=callback_url,
+                )
+            )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_request_logger(settings.log_level)
+    register_configured_providers(settings)
 
     app = FastAPI(
         title="Math Blasters API",

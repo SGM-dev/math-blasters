@@ -64,6 +64,7 @@ def default_on_profile(profile: ProviderProfile) -> None:
     pass
 
 
+on_profile = default_on_profile
 _on_profile_hook: Callable[[ProviderProfile], Any] = default_on_profile
 
 
@@ -330,8 +331,20 @@ def oauth_callback(
         response.delete_cookie(key="oauth_flow", path="/api/auth")
         return response
 
-    get_on_profile_hook()(profile)
-
     response = RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
     response.delete_cookie(key="oauth_flow", path="/api/auth")
+
+    try:
+        get_on_profile_hook()(profile)
+    except Exception as exc:
+        logger.exception("Error processing authenticated profile in on_profile hook")
+        cookie_hdr = response.headers.get("set-cookie")
+        headers = {"Set-Cookie": cookie_hdr} if cookie_hdr else {}
+        raise APIException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="internal",
+            message="Internal error processing authenticated profile",
+            headers=headers,
+        ) from exc
+
     return response
