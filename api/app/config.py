@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     completions_rate_limit: str = "20/minute"
 
     # Environment mode: 'development', 'test', 'production'
-    env: str = "development"
+    # Default to production (fail-closed) so deployments without explicit ENV fail safely.
+    env: str = "production"
 
     # Secret key for HMAC-signing OAuth state cookies.
     auth_secret_key: str = INSECURE_DEV_AUTH_SECRET
@@ -36,7 +37,7 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
 
     # Comma-separated list of allowed post-login redirect targets/prefixes.
-    allowed_post_login_redirects: str = "http://localhost:5173,/"
+    allowed_post_login_redirects: str = "http://localhost:5173"
 
     # GitHub OAuth credentials (provider registered only when both are present).
     github_client_id: str | None = None
@@ -44,15 +45,11 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def allowed_post_login_redirect_list(self) -> list[str]:
-        return [
-            origin.strip()
-            for origin in self.allowed_post_login_redirects.split(",")
-            if origin.strip()
-        ]
+        return [r.strip() for r in self.allowed_post_login_redirects.split(",") if r.strip()]
 
 
 @lru_cache

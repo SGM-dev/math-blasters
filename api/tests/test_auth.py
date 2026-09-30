@@ -120,7 +120,7 @@ def test_start_accepts_allowed_redirect_target(client):
     assert cookie_val is not None
     payload = verify_state_cookie(cookie_val, get_settings().auth_secret_key)
     assert payload is not None
-    assert payload["next"] == "/dashboard"
+    assert payload["next"] == "http://localhost:5173/dashboard"
 
 
 def test_start_cookie_contains_expected_payload_and_valid_signature(client):
@@ -136,7 +136,8 @@ def test_start_cookie_contains_expected_payload_and_valid_signature(client):
     assert payload["provider"] == "fake"
     assert "state" in payload and len(payload["state"]) > 16
     assert "verifier" in payload and len(payload["verifier"]) > 32
-    assert payload["exp"] > time.time()
+    assert "next" in payload
+    assert verify_state_cookie(cookie_val, get_settings().auth_secret_key, max_age=-1) is None
 
 
 def test_start_respects_path_prefix_on_allowed_origin(client, monkeypatch):
@@ -228,7 +229,52 @@ def test_callback_tampered_state_cookie_returns_400_validation_error(client):
     assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
 
 
-def test_callback_expired_state_cookie_returns_400_validation_error(client):
+def test_callback_non_ascii_cookie_returns_400_validation_error(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    headers = httpx2.Headers({"cookie": "oauth_flow=ümlaut_cookie_val_ñ"}, encoding="latin-1")
+    response = client.get(
+        "/api/auth/fake/callback?code=good-code&state=test-state",
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"]["code"] == "validation_error"
+    assert "Missing, invalid, or expired" in data["error"]["message"]
+
+    cookie_header = response.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+    # Also verify directly that undecodable non-ascii cookie returns None
+    assert verify_state_cookie("ümlaut_cookie_val_ñ_🚀", get_settings().auth_secret_key) is None
+
+
+def test_callback_non_ascii_state_returns_400_validation_error(client):
+    fake = FakeProvider(name="fake")
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    response = client.get(
+        "/api/auth/fake/callback?code=good-code&state=ümlaut_state_ñ_🚀",
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert data["error"]["code"] == "validation_error"
+    assert "state" in data["error"]["message"].lower()
+
+    cookie_header = response.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
+def test_callback_expired_state_cookie_returns_400_validation_error(client, monkeypatch):
     fake = FakeProvider(name="fake")
     register(fake)
 
@@ -239,7 +285,10 @@ def test_callback_expired_state_cookie_returns_400_validation_error(client):
         "provider": "fake",
         "next": "/dashboard",
     }
-    expired_cookie = sign_state_cookie(cookie_payload, settings.auth_secret_key, max_age=-10)
+    real_time = time.time()
+    expired_cookie = sign_state_cookie(cookie_payload, settings.auth_secret_key)
+    # Advance time past max_age (600s) so the cookie is expired when callback verifies it
+    monkeypatch.setattr(time, "time", lambda: real_time + 1000)
 
     client.cookies.set("oauth_flow", expired_cookie, path="/api/auth")
     response = client.get(
@@ -279,7 +328,7 @@ def test_callback_happy_path_exchanges_code_calls_hook_and_redirects(client, mon
     )
 
     assert callback_resp.status_code == 307
-    assert callback_resp.headers["location"] == "/dashboard"
+    assert callback_resp.headers["location"] == "http://localhost:5173/dashboard"
 
     # State cookie should be cleared
     cookie_header = callback_resp.headers.get("set-cookie")
@@ -447,7 +496,7 @@ def test_callback_provider_error_query_param_sanitization_prevents_open_redirect
 
     assert callback_resp.status_code == 307
     redirect_loc = callback_resp.headers["location"]
-    assert redirect_loc.startswith("/dashboard")
+    assert redirect_loc.startswith("http://localhost:5173/dashboard")
     assert "error=provider_error" in redirect_loc
     assert "https://evil.com" not in redirect_loc
     assert "\r" not in redirect_loc and "\n" not in redirect_loc
@@ -542,6 +591,34 @@ def test_callback_unreachable_provider_network_error_redirects_cleanly(client):
     assert "Connection refused" not in redirect_loc
 
 
+def test_callback_provider_timeout_error_redirects_cleanly(client):
+    class TimeoutFake(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise TimeoutError("Request timed out connecting to provider")
+
+    fake = TimeoutFake()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    location = start_resp.headers["location"]
+    state = parse_qs(urlsplit(location).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "error=provider_error" in redirect_loc
+    assert "Request timed out" not in redirect_loc
+
+
 def test_callback_provider_value_error_redirects_and_clears_cookie(client):
     class MalformedProfileFake(FakeProvider):
         def __init__(self):
@@ -574,7 +651,7 @@ def test_callback_provider_value_error_redirects_and_clears_cookie(client):
     assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
 
 
-def test_callback_programming_error_in_provider_raises_500_not_masked(client):
+def test_callback_non_http_provider_error_redirects_cleanly(client):
     class BuggyProvider(FakeProvider):
         def __init__(self):
             super().__init__(name="fake")
@@ -590,21 +667,50 @@ def test_callback_programming_error_in_provider_raises_500_not_masked(client):
     cookie_val = start_resp.cookies.get("oauth_flow")
 
     client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
-    # Programming errors must not be caught as provider_error; bubble up as unhandled
-    with pytest.raises(AttributeError, match="has no attribute 'get'"):
-        client.get(
-            f"/api/auth/fake/callback?code=good-code&state={state}",
-            follow_redirects=False,
-        )
-
-    # When client suppresses exception propagation, server returns HTTP 500
-    safe_client = TestClient(client.app, raise_server_exceptions=False)
-    safe_client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
-    resp = safe_client.get(
+    callback_resp = client.get(
         f"/api/auth/fake/callback?code=good-code&state={state}",
         follow_redirects=False,
     )
-    assert resp.status_code == 500
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "error=provider_error" in redirect_loc
+    assert "NoneType" not in redirect_loc
+
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
+
+
+def test_callback_unexpected_os_error_redirects_cleanly(client):
+    class FileSystemErrorProvider(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise FileNotFoundError("Local configuration or credential file missing")
+
+    fake = FileSystemErrorProvider()
+    register(fake)
+
+    start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert callback_resp.status_code == 307
+    redirect_loc = callback_resp.headers["location"]
+    assert "error=provider_error" in redirect_loc
+    assert "FileNotFoundError" not in redirect_loc
+
+    cookie_header = callback_resp.headers.get("set-cookie")
+    assert cookie_header is not None
+    assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
 
 
 def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, caplog):
@@ -612,15 +718,39 @@ def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, cap
     monkeypatch.setattr(get_settings(), "github_client_secret", secret_value)
     monkeypatch.setattr(get_settings(), "auth_secret_key", secret_value)
 
-    fake = FakeProvider(name="fake")
+    class SecretCarryingErrorProvider(FakeProvider):
+        def __init__(self):
+            super().__init__(name="fake")
+
+        def exchange_code(self, code, code_verifier):
+            raise RuntimeError(f"Token exchange failed with secret {secret_value}")
+
+    fake = SecretCarryingErrorProvider()
     register(fake)
 
+    # 1. Start flow: secret must not leak in redirect or cookie
     start_resp = client.get("/api/auth/fake/start?next=/dashboard", follow_redirects=False)
     assert secret_value not in start_resp.headers.get("location", "")
     assert secret_value not in start_resp.headers.get("set-cookie", "")
 
-    # Check request log output
+    state = parse_qs(urlsplit(start_resp.headers["location"]).query)["state"][0]
+    cookie_val = start_resp.cookies.get("oauth_flow")
+
+    # 2. Callback failure: provider error containing secret must not leak into redirect or logs
+    caplog.clear()
+    client.cookies.set("oauth_flow", cookie_val, path="/api/auth")
+    callback_resp = client.get(
+        f"/api/auth/fake/callback?code=good-code&state={state}",
+        follow_redirects=False,
+    )
+    assert callback_resp.status_code == 307
+    assert secret_value not in callback_resp.headers.get("location", "")
+    assert secret_value not in callback_resp.headers.get("set-cookie", "")
+
+    # Check that error text with secret was not written to logs, but provider name & error type were
     assert secret_value not in caplog.text
+    assert "fake" in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_provider(
@@ -746,6 +876,28 @@ def test_production_environment_accepts_secure_auth_secret_key(monkeypatch):
     try:
         settings = get_settings()
         assert settings.auth_secret_key == "super-secret-production-random-key-9876543210"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_default_environment_fails_closed_and_rejects_insecure_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("AUTH_SECRET_KEY", "insecure-dev-secret-key-change-in-production")
+    try:
+        with pytest.raises(RuntimeError, match="AUTH_SECRET_KEY must be set to a secure"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_development_environment_allows_insecure_auth_secret_key(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("AUTH_SECRET_KEY", "insecure-dev-secret-key-change-in-production")
+    try:
+        settings = get_settings()
+        assert settings.auth_secret_key == "insecure-dev-secret-key-change-in-production"
     finally:
         get_settings.cache_clear()
 

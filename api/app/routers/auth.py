@@ -17,21 +17,19 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import logging
 import re
 import secrets
-import time
 from typing import Annotated, Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 
-import httpx2
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
+from itsdangerous import BadData, URLSafeTimedSerializer
 from sqlalchemy import select
 
 from app.auth import OptionalCurrentAccountDep
-from app.config import Settings, get_settings
+from app.config import MIN_AUTH_SECRET_KEY_LENGTH, Settings, get_settings
 from app.db import SessionDep
 from app.exceptions import APIException
 from app.learner import LEARNER_COOKIE_NAME, LEARNER_TOKEN_PATTERN, issue_learner_identity
@@ -85,65 +83,34 @@ def generate_pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _derive_hmac_key(secret_key: str) -> bytes:
-    """Derive a fixed-length 256-bit HMAC key from the secret string."""
-    if not secret_key or len(secret_key) < 32:
-        raise ValueError("secret_key must be at least 32 characters long")
-    return hashlib.sha256(secret_key.encode("utf-8")).digest()
+def sign_state_cookie(payload: dict[str, Any], secret_key: str) -> str:
+    """Serialize and sign payload with an embedded timestamp using URLSafeTimedSerializer."""
+    if not secret_key or len(secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
+        raise ValueError(
+            f"secret_key must be at least {MIN_AUTH_SECRET_KEY_LENGTH} characters long"
+        )
+    serializer = URLSafeTimedSerializer(secret_key, salt="oauth-flow")
+    return serializer.dumps(payload)
 
 
-def sign_state_cookie(payload: dict[str, Any], secret_key: str, max_age: int = 600) -> str:
-    """Serialize and sign payload with an expiration timestamp using HMAC-SHA256."""
-    key = _derive_hmac_key(secret_key)
-    data = dict(payload)
-    data["exp"] = int(time.time()) + max_age
-    payload_bytes = json.dumps(data, separators=(",", ":")).encode("utf-8")
-    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
-    sig = hmac.new(
-        key,
-        payload_b64.encode("ascii"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{payload_b64}.{sig}"
-
-
-def verify_state_cookie(cookie_value: str, secret_key: str) -> dict[str, Any] | None:
-    """Verify HMAC signature and timestamp; return payload dict if valid, else None."""
-    if not cookie_value or "." not in cookie_value or not secret_key:
+def verify_state_cookie(
+    cookie_value: str | None,
+    secret_key: str,
+    max_age: int = 600,
+) -> dict[str, Any] | None:
+    """Verify signature and timestamp with URLSafeTimedSerializer.
+    Return payload dict if valid, else None.
+    """
+    if not cookie_value or not secret_key or len(secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
         return None
 
     try:
-        key = _derive_hmac_key(secret_key)
-    except ValueError:
-        return None
-
-    payload_b64, sig = cookie_value.split(".", 1)
-    expected_sig = hmac.new(
-        key,
-        payload_b64.encode("ascii"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(sig, expected_sig):
-        return None
-
-    padding = (-len(payload_b64)) % 4
-    padded_b64 = payload_b64 + ("=" * padding)
-
-    try:
-        data = json.loads(base64.urlsafe_b64decode(padded_b64.encode("ascii")).decode("utf-8"))
-    except Exception as exc:
+        serializer = URLSafeTimedSerializer(secret_key, salt="oauth-flow")
+        data = serializer.loads(cookie_value, max_age=max_age)
+        return data if isinstance(data, dict) else None
+    except (BadData, Exception) as exc:
         logger.debug("Failed to decode state cookie: %s", exc, exc_info=True)
         return None
-
-    if not isinstance(data, dict):
-        logger.debug("State cookie payload is not a dictionary")
-        return None
-
-    if time.time() > data.get("exp", 0):
-        logger.debug("State cookie expired")
-        return None
-
-    return data
 
 
 def get_default_redirect_target(settings: Settings) -> str:
@@ -159,16 +126,9 @@ def _matches_path_prefix(target_path: str, allowed_path: str) -> bool:
 
 def clear_cookie_headers(settings: Settings) -> dict[str, str]:
     """Build Set-Cookie header to clear oauth_flow with matching security attributes."""
-    dummy = Response()
-    dummy.delete_cookie(
-        key="oauth_flow",
-        path="/api/auth",
-        httponly=True,
-        samesite="lax",
-        secure=settings.cookie_secure,
-    )
-    cookie_hdr = dummy.headers.get("set-cookie")
-    return {"Set-Cookie": cookie_hdr} if cookie_hdr else {}
+    secure_flag = "; Secure" if settings.cookie_secure else ""
+    hdr = f'oauth_flow=""; Path=/api/auth; Max-Age=0; HttpOnly; SameSite=lax{secure_flag}'
+    return {"Set-Cookie": hdr}
 
 
 _SAFE_ERROR_CODE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -180,19 +140,13 @@ def _redirect_clearing_cookie(
     error: str | None = None,
     error_description: str | None = None,
 ) -> RedirectResponse:
-    params: list[str] = []
+    params: dict[str, str] = {}
     if error:
-        safe_error = error if _SAFE_ERROR_CODE.match(error) else "provider_error"
-        params.append(f"error={quote(safe_error, safe='')}")
+        params["error"] = error if _SAFE_ERROR_CODE.match(error) else "provider_error"
     if error_description:
-        clean_desc = re.sub(r"[\r\n\t]", " ", error_description).strip()[:200]
-        params.append(f"error_description={quote(clean_desc, safe='')}")
+        params["error_description"] = re.sub(r"[\r\n\t]", " ", error_description).strip()[:200]
 
-    url = target
-    if params:
-        sep = "&" if "?" in target else "?"
-        url = f"{target}{sep}{'&'.join(params)}"
-
+    url = f"{target}{'&' if '?' in target else '?'}{urlencode(params)}" if params else target
     response = RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
     response.delete_cookie(
         key="oauth_flow",
@@ -210,20 +164,32 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
     if not target:
         return get_default_redirect_target(settings)
 
-    if not target.startswith(("//", "/\\", "\\")):
-        if target.startswith("/"):
-            if any(p.startswith("/") and _matches_path_prefix(target, p) for p in allowlist):
-                return target
-        else:
-            parsed = urlsplit(target)
-            if parsed.scheme in ("http", "https") and "@" not in parsed.netloc:
-                target_origin = f"{parsed.scheme}://{parsed.netloc}"
-                for allowed in allowlist:
-                    if allowed.startswith(("http://", "https://")):
-                        allowed_parsed = urlsplit(allowed)
-                        if target_origin == f"{allowed_parsed.scheme}://{allowed_parsed.netloc}":
-                            if _matches_path_prefix(parsed.path, allowed_parsed.path):
-                                return target
+    if target.startswith(("//", "/\\", "\\")):
+        raise APIException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="validation_error",
+            message=f"Redirect target '{target}' is not allowed",
+        )
+
+    parsed_allowed = [
+        urlsplit(entry) for entry in allowlist if entry.startswith(("http://", "https://"))
+    ]
+
+    resolved_target = target
+    if target.startswith("/"):
+        web_origins = [
+            f"{p.scheme}://{p.netloc}" for p in parsed_allowed
+        ] or settings.cors_origin_list
+        if web_origins:
+            resolved_target = urljoin(web_origins[0], target)
+
+    parsed = urlsplit(resolved_target)
+    if parsed.scheme in ("http", "https") and "@" not in parsed.netloc:
+        target_origin = f"{parsed.scheme}://{parsed.netloc}"
+        for allowed in parsed_allowed:
+            allowed_origin = f"{allowed.scheme}://{allowed.netloc}"
+            if target_origin == allowed_origin and _matches_path_prefix(parsed.path, allowed.path):
+                return resolved_target
 
     raise APIException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -314,7 +280,13 @@ def oauth_callback(
         )
 
     expected_state = cookie_payload.get("state")
-    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+    if (
+        not state
+        or not expected_state
+        or not isinstance(state, str)
+        or not state.isascii()
+        or not hmac.compare_digest(state, expected_state)
+    ):
         raise APIException(
             status_code=status.HTTP_400_BAD_REQUEST,
             code="validation_error",
@@ -349,8 +321,12 @@ def oauth_callback(
     try:
         tokens = provider_instance.exchange_code(code=code, code_verifier=verifier)
         profile = provider_instance.fetch_profile(tokens)
-    except (httpx2.HTTPError, OSError, ValueError):
-        logger.exception("OAuth code exchange or profile fetch failed for provider '%s'", provider)
+    except Exception as exc:
+        logger.warning(
+            "OAuth code exchange or profile fetch failed for provider '%s': %s",
+            provider,
+            type(exc).__name__,
+        )
         return _redirect_clearing_cookie(target, settings, error="provider_error")
 
     response = _redirect_clearing_cookie(target, settings)
