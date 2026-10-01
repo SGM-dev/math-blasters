@@ -72,7 +72,12 @@ def logout(request: Request, response: Response, session: SessionDep) -> None:
 
 # Profile hook stub; wire issue #117 points this to resolve_account from #85.
 def on_profile(profile: ProviderProfile) -> None:
-    pass
+    logger.warning(
+        "OAuth on_profile hook stub called for provider '%s' (account_id=%s); "
+        "session creation pending wire issue #117",
+        profile.provider,
+        profile.provider_account_id,
+    )
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -177,9 +182,7 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
 
     resolved_target = target
     if target.startswith("/"):
-        web_origins = [
-            f"{p.scheme}://{p.netloc}" for p in parsed_allowed
-        ] or settings.cors_origin_list
+        web_origins = [f"{p.scheme}://{p.netloc}" for p in parsed_allowed]
         if web_origins:
             resolved_target = urljoin(web_origins[0], target)
 
