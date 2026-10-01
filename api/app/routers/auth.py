@@ -113,7 +113,7 @@ def verify_state_cookie(
         serializer = URLSafeTimedSerializer(secret_key, salt="oauth-flow")
         data = serializer.loads(cookie_value, max_age=max_age)
         return data if isinstance(data, dict) else None
-    except (BadData, Exception) as exc:
+    except BadData as exc:
         logger.debug("Failed to decode state cookie: %s", exc, exc_info=True)
         return None
 
