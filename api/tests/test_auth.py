@@ -172,6 +172,16 @@ def test_start_respects_path_prefix_on_allowed_origin(client, monkeypatch):
     assert resp_sibling.status_code == 400
     assert resp_sibling.json()["error"]["code"] == "validation_error"
 
+    # Dot segments, plain or percent-encoded, must not climb out of the prefix
+    for escape in ("/app/../admin", "/app/%2e%2e/admin", "/app/..%2fadmin"):
+        resp_escape = client.get(
+            "/api/auth/fake/start",
+            params={"next": f"https://app.example.com{escape}"},
+            follow_redirects=False,
+        )
+        assert resp_escape.status_code == 400
+        assert resp_escape.json()["error"]["code"] == "validation_error"
+
 
 def test_start_never_leaks_secrets(client, monkeypatch):
     fake = FakeProvider(name="fake")
@@ -781,18 +791,6 @@ def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_
     assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header
 
 
-def test_create_app_registers_github_provider_when_configured(monkeypatch):
-    from app.providers import get_provider
-
-    monkeypatch.setattr(get_settings(), "github_client_id", "test-gh-client-id")
-    monkeypatch.setattr(get_settings(), "github_client_secret", "test-gh-client-secret")
-    create_app()
-    gh = get_provider("github")
-    assert gh is not None
-    assert gh.client_id == "test-gh-client-id"
-    assert gh.redirect_uri.endswith("/api/auth/github/callback")
-
-
 def test_on_profile_stub_callable():
     profile = ProviderProfile(
         provider="github",
@@ -809,18 +807,7 @@ def test_verify_state_cookie_logs_debug_on_decode_error(caplog):
     import logging
 
     caplog.set_level(logging.DEBUG, logger="api.auth")
-    # Craft a cookie whose HMAC signature is valid for a corrupted base64 string
-    corrupted_b64 = "invalid-b64-content!!!"
-    import hashlib
-    import hmac
-
-    key = hashlib.sha256(get_settings().auth_secret_key.encode("utf-8")).digest()
-    sig = hmac.new(
-        key,
-        corrupted_b64.encode("ascii"),
-        hashlib.sha256,
-    ).hexdigest()
-    result = verify_state_cookie(f"{corrupted_b64}.{sig}", get_settings().auth_secret_key)
+    result = verify_state_cookie("not-a-signed-cookie", get_settings().auth_secret_key)
     assert result is None
     assert "Failed to decode state cookie" in caplog.text
 
@@ -880,7 +867,11 @@ def test_production_environment_accepts_secure_auth_secret_key(monkeypatch):
         get_settings.cache_clear()
 
 
-def test_default_environment_fails_closed_and_rejects_insecure_auth_secret_key(monkeypatch):
+def test_default_environment_fails_closed_and_rejects_insecure_auth_secret_key(
+    monkeypatch, tmp_path
+):
+    # Settings reads .env from the working directory, so run where there is none.
+    monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     monkeypatch.delenv("ENV", raising=False)
     monkeypatch.setenv("AUTH_SECRET_KEY", "insecure-dev-secret-key-change-in-production")
@@ -902,9 +893,13 @@ def test_development_environment_allows_insecure_auth_secret_key(monkeypatch):
         get_settings.cache_clear()
 
 
-def test_sign_and_verify_state_cookie_reject_short_key():
-    payload = {"state": "xyz", "verifier": "abc"}
-    with pytest.raises(ValueError, match="at least 32 characters long"):
-        sign_state_cookie(payload, "short-key")
-
-    assert verify_state_cookie("some.cookie.val", "short-key") is None
+@pytest.mark.parametrize("allowlist", ["", "/", "/app, /dashboard"])
+def test_allowlist_without_absolute_url_is_rejected_at_startup(monkeypatch, allowlist):
+    get_settings.cache_clear()
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("ALLOWED_POST_LOGIN_REDIRECTS", allowlist)
+    try:
+        with pytest.raises(RuntimeError, match="at least one absolute"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()

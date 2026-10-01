@@ -18,10 +18,11 @@ import base64
 import hashlib
 import hmac
 import logging
+import posixpath
 import re
 import secrets
 from typing import Annotated, Any
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import unquote, urlencode, urljoin, urlsplit
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -29,7 +30,7 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 from sqlalchemy import select
 
 from app.auth import OptionalCurrentAccountDep
-from app.config import MIN_AUTH_SECRET_KEY_LENGTH, Settings, get_settings
+from app.config import Settings, get_settings
 from app.db import SessionDep
 from app.exceptions import APIException
 from app.learner import LEARNER_COOKIE_NAME, LEARNER_TOKEN_PATTERN, issue_learner_identity
@@ -90,10 +91,6 @@ def generate_pkce_pair() -> tuple[str, str]:
 
 def sign_state_cookie(payload: dict[str, Any], secret_key: str) -> str:
     """Serialize and sign payload with an embedded timestamp using URLSafeTimedSerializer."""
-    if not secret_key or len(secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
-        raise ValueError(
-            f"secret_key must be at least {MIN_AUTH_SECRET_KEY_LENGTH} characters long"
-        )
     serializer = URLSafeTimedSerializer(secret_key, salt="oauth-flow")
     return serializer.dumps(payload)
 
@@ -106,7 +103,7 @@ def verify_state_cookie(
     """Verify signature and timestamp with URLSafeTimedSerializer.
     Return payload dict if valid, else None.
     """
-    if not cookie_value or not secret_key or len(secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
+    if not cookie_value:
         return None
 
     try:
@@ -118,15 +115,26 @@ def verify_state_cookie(
         return None
 
 
+def _absolute_allowlist(settings: Settings) -> list[str]:
+    return [
+        entry
+        for entry in settings.allowed_post_login_redirect_list
+        if entry.startswith(("http://", "https://"))
+    ]
+
+
 def get_default_redirect_target(settings: Settings) -> str:
-    """Return the primary allowed redirect destination, defaulting to root if none."""
-    allowlist = settings.allowed_post_login_redirect_list
-    return allowlist[0] if allowlist else "/"
+    """Return the first absolute allowlist entry; get_settings guarantees there is one."""
+    return _absolute_allowlist(settings)[0]
 
 
 def _matches_path_prefix(target_path: str, allowed_path: str) -> bool:
     allowed = allowed_path.rstrip("/")
-    return not allowed or target_path == allowed or target_path.startswith(f"{allowed}/")
+    if not allowed:
+        return True
+    # Resolve dot segments (plain or percent-encoded) so they cannot climb out of the prefix.
+    resolved = posixpath.normpath(unquote(target_path)) if target_path else ""
+    return resolved == allowed or resolved.startswith(f"{allowed}/")
 
 
 def clear_cookie_headers(settings: Settings) -> dict[str, str]:
@@ -165,7 +173,6 @@ def _redirect_clearing_cookie(
 
 def validate_redirect_target(target: str | None, settings: Settings) -> str:
     """Validate that target matches the allowed post-login redirect allowlist."""
-    allowlist = settings.allowed_post_login_redirect_list
     if not target:
         return get_default_redirect_target(settings)
 
@@ -176,9 +183,7 @@ def validate_redirect_target(target: str | None, settings: Settings) -> str:
             message=f"Redirect target '{target}' is not allowed",
         )
 
-    parsed_allowed = [
-        urlsplit(entry) for entry in allowlist if entry.startswith(("http://", "https://"))
-    ]
+    parsed_allowed = [urlsplit(entry) for entry in _absolute_allowlist(settings)]
 
     resolved_target = target
     if target.startswith("/"):

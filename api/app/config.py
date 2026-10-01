@@ -9,7 +9,7 @@ INSECURE_DEV_AUTH_SECRET = "insecure-dev-secret-key-change-in-production"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # postgresql+psycopg://<user>:<password>@<host>:<port>/<database>
     database_url: str = "postgresql+psycopg://mathblasters:mathblasters@localhost:5433/mathblasters"
@@ -36,12 +36,16 @@ class Settings(BaseSettings):
     # Public base URL of the API (for constructing callback URLs).
     api_base_url: str = "http://localhost:8000"
 
-    # Comma-separated list of allowed post-login redirect targets/prefixes.
+    # Comma-separated absolute http(s) URLs allowed after login; the first is the default.
     allowed_post_login_redirects: str = "http://localhost:5173"
 
     # GitHub OAuth credentials (provider registered only when both are present).
     github_client_id: str | None = None
     github_client_secret: str | None = None
+
+    # Google OAuth credentials (provider registered only when both are present).
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -64,5 +68,12 @@ def get_settings() -> Settings:
     if len(settings.auth_secret_key) < MIN_AUTH_SECRET_KEY_LENGTH:
         raise RuntimeError(
             f"AUTH_SECRET_KEY must be at least {MIN_AUTH_SECRET_KEY_LENGTH} characters long."
+        )
+    if not any(
+        entry.startswith(("http://", "https://"))
+        for entry in settings.allowed_post_login_redirect_list
+    ):
+        raise RuntimeError(
+            "ALLOWED_POST_LOGIN_REDIRECTS must contain at least one absolute http(s) URL."
         )
     return settings
