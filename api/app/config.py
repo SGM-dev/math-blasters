@@ -9,7 +9,7 @@ INSECURE_DEV_AUTH_SECRET = "insecure-dev-secret-key-change-in-production"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
 
     # postgresql+psycopg://<user>:<password>@<host>:<port>/<database>
     database_url: str = "postgresql+psycopg://mathblasters:mathblasters@localhost:5433/mathblasters"

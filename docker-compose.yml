@@ -31,6 +31,8 @@ services:
       # Local Compose serves HTTP; production deployments must set this true.
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       COMPLETIONS_RATE_LIMIT: ${COMPLETIONS_RATE_LIMIT:-20/minute}
+      ENV: ${ENV:-development}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-insecure-dev-secret-key-change-in-production}
     ports:
       - "8000:8000"
     depends_on:
