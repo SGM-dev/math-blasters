@@ -763,9 +763,7 @@ def test_client_secrets_never_leak_in_logs_or_responses(client, monkeypatch, cap
     assert "RuntimeError" in caplog.text
 
 
-def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_provider(
-    client, monkeypatch
-):
+def test_callback_hook_failure_redirects_with_internal_error(client, monkeypatch, caplog):
     fake = FakeProvider(name="fake")
     register(fake)
 
@@ -784,8 +782,14 @@ def test_callback_hook_failure_raises_internal_error_and_does_not_conflate_with_
         f"/api/auth/fake/callback?code=good-code&state={state}",
         follow_redirects=False,
     )
-    assert resp.status_code == 500
-    assert resp.json()["error"]["code"] == "internal"
+    assert resp.status_code == 307
+    redirect_loc = resp.headers["location"]
+    assert redirect_loc.startswith("http://localhost:5173/dashboard")
+    assert "error=internal_error" in redirect_loc
+    assert "provider_error" not in redirect_loc
+    assert "Database" not in redirect_loc
+    # The failure stays diagnosable server-side
+    assert "on_profile hook" in caplog.text
     cookie_header = resp.headers.get("set-cookie")
     assert cookie_header is not None
     assert 'oauth_flow=""' in cookie_header or "oauth_flow=;" in cookie_header

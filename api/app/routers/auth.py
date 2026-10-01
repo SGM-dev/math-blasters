@@ -337,19 +337,11 @@ def oauth_callback(
         )
         return _redirect_clearing_cookie(target, settings, error="provider_error")
 
-    response = _redirect_clearing_cookie(target, settings)
-
+    # A browser navigation should land back in the app, not on a JSON error page.
     try:
         on_profile(profile)
-    except Exception as exc:
+    except Exception:
         logger.exception("Error processing authenticated profile in on_profile hook")
-        cookie_hdr = response.headers.get("set-cookie")
-        headers = {"Set-Cookie": cookie_hdr} if cookie_hdr else clear_cookie_headers(settings)
-        raise APIException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            code="internal",
-            message="Internal error processing authenticated profile",
-            headers=headers,
-        ) from exc
+        return _redirect_clearing_cookie(target, settings, error="internal_error")
 
-    return response
+    return _redirect_clearing_cookie(target, settings)
